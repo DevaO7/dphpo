@@ -32,6 +32,12 @@ MANIFEST
 *.manifest
 *.spec
 
+src/temp.py
+src/test.py
+data/synthetic/data
+tuning_results/
+logs/
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
