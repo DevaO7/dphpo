@@ -7,8 +7,8 @@ dim_input: 40
 dim_output: 10
 dim_pca: None
 noise_ratio: 0.05 
-alpha: 0.0
-beta: 0.0
+alpha: 1.0
+beta: 1.0
 ratio_training: 0.8
 number: 2
 max_data_feature_norm: 2.0
@@ -16,3 +16,7 @@ seed_user: 0
 standardize: False
 iid: False
 path: ./src/data/synthetic/data
+batch_size: 400
+loss_fn: NLLLoss
+x_label: x 
+y_label: y

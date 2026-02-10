@@ -1,0 +1,12 @@
+name: flwrlabs/femnist
+model_name: CNN_FEMNIST
+nb_users: 40
+batch_size: 200
+partitioner_name: IidPartitioner
+partitioner_parameter: 
+dim_output: 62
+similarity: iid
+x_label: image
+y_label: character
+loss_fn: CrossEntropyLoss
+max_samples_per_client: 2500
