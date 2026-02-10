@@ -3,11 +3,235 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, RandomSampler
-from byzfl import Client, Server, ByzantineClient, DataDistributor
-import byzfl.aggregators as aggregators
 from data.synthetic.data_generator import SyntheticDataset, read_data
-import byzfl.fed_framework.models as models
 import os
+from typing import Callable, Dict, Tuple, Optional, List, Union
+from dataclasses import dataclass
+import flwr_datasets.partitioner as partitioners
+from flwr_datasets import FederatedDataset
+from torchvision.transforms import ToTensor
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+@dataclass
+class FlowerFederatedLoaders:
+    dataset_name: str
+    num_clients: int
+    partitioner_name: str = "DirichletPartitioner"
+    alpha: float = 0.1
+    batch_size: int = 64
+    num_workers: int = 0
+    client_test_fraction: float = 0.2
+    seed: int = 42
+    image_key: str = "img"
+    label_key: str = "label"
+    transform_fn: Optional[Callable] = None, 
+    max_number_samples_per_client: Optional[int] = 100
+
+    def __post_init__(self) -> None:
+        partitioner = getattr(partitioners, self.partitioner_name)
+        if self.partitioner_name == "IidPartitioner":
+            self.partitioner = partitioner(num_partitions=self.num_clients)
+        elif self.partitioner_name == "DirichletPartitioner":
+            self.partitioner = partitioner(num_partitions=self.num_clients, partition_by=self.label_key, alpha=self.alpha, seed=self.seed)
+        else:
+            raise NotImplementedError(f"Partitioner {self.partitioner_name} not implemented.")
+        self.fds = FederatedDataset(
+            dataset=self.dataset_name,
+            partitioners={"train": self.partitioner},
+        )
+        if self.transform_fn is None:
+            to_tensor = ToTensor()
+            def default_transform(batch):
+                batch[self.image_key] = [to_tensor(img) for img in batch[self.image_key]]
+                return batch
+            self.transform_fn = default_transform
+
+    def get_client_loaders(self, cid: int) -> Tuple[DataLoader, DataLoader]:
+        partition = self.fds.load_partition(cid , "train")
+        k = min(self.max_number_samples_per_client, len(partition))
+        partition = partition.shuffle(seed=self.seed + cid).select(range(k))
+        split = partition.train_test_split(
+            test_size=self.client_test_fraction,
+            seed=self.seed + cid,
+        )
+        train_ds = split["train"].with_transform(self.transform_fn)
+        test_ds = split["test"].with_transform(self.transform_fn)
+        g = torch.Generator().manual_seed(self.seed + cid )
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            generator=g,
+            drop_last=False,
+        )
+        test_loader = DataLoader(
+            test_ds,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            drop_last=False,
+            generator=g
+        )
+
+        return train_loader, test_loader
+    
+    def feature_info(self) -> Dict:
+        """Useful when switching datasets: inspect keys/types."""
+        part0 = self.fds.load_partition(0, "train")
+        return dict(part0.features)  # docs show inspecting partition.features :contentReference[oaicite:6]{index=6}
+
+
+def _extract_labels_from_batch(
+    batch,
+    label_key_candidates: Tuple[str, ...] = ("label", "labels", "target", "targets", "y", "character"),
+):
+    """
+    Supports:
+      - tuple/list batch: assume labels are at index 1 (x, y) or last position
+      - dict batch: find first matching label key
+    Returns: torch.Tensor of labels
+    """
+    if isinstance(batch, (tuple, list)):
+        # Common cases: (x, y) or (x, y, meta...)
+        y = batch[1] if len(batch) >= 2 else batch[-1]
+        return y
+
+    if isinstance(batch, dict):
+        for k in label_key_candidates:
+            if k in batch:
+                return batch[k]
+        raise KeyError(f"Could not find labels in batch dict. Keys={list(batch.keys())}")
+
+    raise TypeError(f"Unsupported batch type: {type(batch)}")
+
+
+def count_label_distribution_from_loaders(
+    loaders: Union[Dict[int, DataLoader], List[DataLoader]],
+    num_classes: int,
+    label_key_candidates: Tuple[str, ...] = ("label", "labels", "target", "targets", "y", "character"),
+    max_batches: Optional[int] = None,
+) -> Tuple[List[int], np.ndarray]:
+    """
+    Returns:
+      client_ids: list of client IDs in plot order
+      counts: shape (num_clients, num_classes)
+    """
+    if isinstance(loaders, dict):
+        client_ids = sorted(loaders.keys())
+        loader_list = [loaders[cid] for cid in client_ids]
+    else:
+        client_ids = list(range(len(loaders)))
+        loader_list = loaders
+
+    counts = np.zeros((len(loader_list), num_classes), dtype=np.int64)
+
+    for i, loader in enumerate(loader_list):
+        for b_idx, batch in enumerate(loader):
+            if max_batches is not None and b_idx >= max_batches:
+                break
+
+            y = _extract_labels_from_batch(batch, label_key_candidates=label_key_candidates)
+
+            # Move to CPU numpy-friendly
+            if isinstance(y, torch.Tensor):
+                y = y.detach().cpu()
+            else:
+                # e.g. numpy array
+                y = torch.as_tensor(y)
+
+            # If one-hot/probabilities: shape (B, C)
+            if y.ndim == 2 and y.shape[1] == num_classes:
+                y = torch.argmax(y, dim=1)
+
+            # Ensure 1D integer labels
+            y = y.view(-1).to(torch.long)
+
+            # Count
+            binc = torch.bincount(y, minlength=num_classes).numpy()
+            counts[i] += binc
+
+    return client_ids, counts
+
+
+def plot_stacked_label_distribution(
+    client_ids: List[int],
+    counts: np.ndarray,
+    label_names: Optional[List[str]] = None,
+    normalize: bool = False,
+    title: str = "Per Partition Labels Distribution",
+    xlabel: str = "Partition ID",
+    ylabel: str = "Count",
+    figsize: Tuple[int, int] = (12, 6),
+    save_path: str = None
+):
+    """
+    Plots stacked bars per client.
+    If normalize=True, plots fractions (each bar sums to 1).
+    """
+    num_clients, num_classes = counts.shape
+
+    if label_names is None:
+        label_names = [f"class_{k}" for k in range(num_classes)]
+    assert len(label_names) == num_classes, "label_names must have length num_classes"
+
+    plot_vals = counts.astype(np.float64)
+    if normalize:
+        denom = plot_vals.sum(axis=1, keepdims=True)
+        denom[denom == 0] = 1.0
+        plot_vals = plot_vals / denom
+        ylabel = "Fraction"
+
+    x = np.arange(num_clients)
+    bottom = np.zeros(num_clients, dtype=np.float64)
+
+    plt.figure(figsize=figsize)
+    for k in range(num_classes):
+        plt.bar(x, plot_vals[:, k], bottom=bottom, label=label_names[k])
+        bottom += plot_vals[:, k]
+
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.xticks(x, [str(cid) for cid in client_ids])
+    plt.legend(title="Labels", bbox_to_anchor=(1.02, 0.5), loc="center left")
+    plt.savefig(os.path.join(save_path, title.replace(" ", "_") + ".png"))
+    plt.close()
+
+def visualize_partition(cfg, train_data_loader, test_data_loader, save_path):
+    train_loaders = {}
+    test_loaders = {}
+
+    for cid in range(cfg.dataset.nb_users):
+        train_loaders[cid] = train_data_loader[cid]
+        test_loaders[cid] = test_data_loader[cid]
+
+    # TRAIN distribution
+    cids, train_counts = count_label_distribution_from_loaders(
+        train_loaders, num_classes=cfg.dataset.dim_output, max_batches=None
+    )
+    plot_stacked_label_distribution(
+        cids, train_counts,
+        label_names=None,  # or your class names
+        normalize=False,
+        title="Per Partition Labels Distribution (Train)", 
+        save_path=save_path
+    )
+
+    # TEST distribution (client-local)
+    cids, test_counts = count_label_distribution_from_loaders(
+        test_loaders, num_classes=cfg.dataset.dim_output, max_batches=None
+    )
+    plot_stacked_label_distribution(
+        cids, test_counts,
+        label_names=None,
+        normalize=False,
+        title="Per Partition Labels Distribution (Test)", 
+        save_path=save_path
+    )
+
 
 
 def read_user_data(index, raw_data, dataset):
@@ -28,47 +252,34 @@ def read_user_data(index, raw_data, dataset):
         y = torch.as_tensor(y).type(torch.int64)
     return id, (X, y)
 
-def get_loader_byzfl(cfg):
+def get_loader_flwr(cfg):
     """
     Loads the raw global datasets.
     """
-    data_path = cfg.dataset.get("path", "./data")
-    
-    if cfg.dataset.name == "mnist":
-        stats = ((0.1307,), (0.3081,))
-    elif cfg.dataset.name == "cifar10":
-        stats = ((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
-    else:
-        raise NotImplementedError(f"Dataset {cfg.dataset.name} not supported.")
-    transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize(*stats)
-    ])
-    train_dataset = getattr(datasets, cfg.dataset.name.upper())(data_path, train=True, download=True, transform=transform)
-    test_dataset = getattr(datasets, cfg.dataset.name.upper())(data_path, train=False, download=True, transform=transform)
+    fed = FlowerFederatedLoaders(
+    dataset_name=cfg.dataset.name,
+    num_clients=cfg.dataset.nb_users,
+    partitioner_name=cfg.dataset.partitioner_name,
+    alpha=cfg.dataset.partitioner_parameter,
+    batch_size=cfg.dataset.batch_size,
+    num_workers=0,
+    client_test_fraction=0.2,
+    seed=cfg.run_settings.seed,
+    image_key=cfg.dataset.x_label,
+    label_key=cfg.dataset.y_label,
+    transform_fn=None, 
+    max_number_samples_per_client=cfg.dataset.max_samples_per_client
+    )
 
-    train_loader = DataLoader(train_dataset, batch_size=cfg.dataset.batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=500, shuffle=False)
+    client_train_loaders = []
+    client_test_loaders = []
+    print('Flower federated data loaders being created...')
+    for user_id in range(cfg.dataset.nb_users):
+        train_loader, test_loader = fed.get_client_loaders(user_id)
+        client_train_loaders.append(train_loader)
+        client_test_loaders.append(test_loader)
 
-    if cfg.run_settings.attack_need_data:
-        nb_recipients = cfg.dataset.nb_users
-    else:
-        nb_recipients = cfg.dataset.nb_users - cfg.run_settings.nb_byzantine
-
-    dist_params = {
-        "data_distribution_name": cfg.dataset.distribution_name,
-        "distribution_parameter": cfg.dataset.distribution_parameter,
-        "nb_honest": nb_recipients, 
-        "batch_size": cfg.dataset.batch_size,
-        "data_loader": train_loader
-    }
-
-    print(f"Initializing Data Distributor (Mode: {cfg.dataset.distribution_name})...")
-    distributor = DataDistributor(dist_params)
-    
-    client_train_loaders = distributor.split_data()
-
-    return client_train_loaders, test_loader
+    return client_train_loaders, client_test_loaders
 
 def get_per_client_loader(cfg, data):
     # For FL Experiments
@@ -79,7 +290,7 @@ def get_per_client_loader(cfg, data):
         dataset = SyntheticDataset(dataset=user_train_data)
         g = torch.Generator().manual_seed(cfg.run_settings.seed + user_id)
         # This is to account for DP sampling
-        train_loader = DataLoader(dataset, batch_size=int(cfg.server.sampling_rate*len(dataset)) if cfg.server.dp else cfg.run_settings.batch_size, shuffle=True, generator=g, drop_last=False)
+        train_loader = DataLoader(dataset, batch_size=cfg.dataset.batch_size, shuffle=True, generator=g, drop_last=False, num_workers=4, pin_memory=True)
         data_loader.append(train_loader)
     return data_loader
 
@@ -117,8 +328,8 @@ def get_data_loaders(cfg, train=True, per_client_loader=True):
     """
     Splits training data among clients, returns Global Test Set for server.
     """
-    if cfg.dataset.name in ["mnist", "cifar10"]:
-        train_data_loader, test_data_loader = get_loader_byzfl(cfg)
+    if cfg.dataset.name in ["mnist", "cifar10", "flwrlabs/femnist", "ylecun/mnist"]:
+        train_data_loader, test_data_loader = get_loader_flwr(cfg)
     elif cfg.dataset.name == "synthetic":
         train_data_loader, test_data_loader = get_loader_from_raw_data(cfg, per_client_loader)
     else:

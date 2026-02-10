@@ -11,8 +11,6 @@ class Server:
         self.selected_users = []
         self.use_cuda = use_cuda
         self.model = copy.deepcopy(model)
-        if self.use_cuda:
-            self.model = self.model.cuda()
         self.similarity = similarity
         self.save_path = save_path
         self.file_name = file_name
@@ -82,12 +80,12 @@ class Server:
 
     def evaluate(self, glob_iter):
         """Saves the metrics at the beginning of each communication round."""
-        stats_test = self.test_error_and_loss()
-        stats_train = self.train_error_and_loss()
-        glob_acc = np.sum(stats_test[2]) * 1.0 / np.sum(stats_test[1])
-        train_acc = np.sum(stats_train[2]) * 1.0 / np.sum(stats_train[1])
-        test_loss  = np.sum(np.array(stats_test[3])  * np.array(stats_test[1]))  / np.sum(stats_test[1])
-        train_loss = np.sum(np.array(stats_train[3]) * np.array(stats_train[1])) / np.sum(stats_train[1])
+        stats_test = self.test_error_and_loss() # [0] ids, [1] num_samples, [2] tot_correct, [3] losses
+        stats_train = self.train_error_and_loss() # [0] ids, [1] num_samples, [2] tot_correct, [3] losses
+        glob_acc = np.sum(stats_test[2]) * 1.0 / np.sum(stats_test[1]) # Total correct / Total samples
+        train_acc = np.sum(stats_train[2]) * 1.0 / np.sum(stats_train[1]) # Total correct / Total samples
+        test_loss  = np.sum(np.array(stats_test[3])  * np.array(stats_test[1]))  / np.sum(stats_test[1]) # Weighted avg loss
+        train_loss = np.sum(np.array(stats_train[3]) * np.array(stats_train[1])) / np.sum(stats_train[1]) # Weighted avg loss
         print("Similarity:", self.similarity)
         print("Average Global Test Accuracy: ", round(glob_acc, 5))
         print("Average Global Test Loss: ", round(test_loss, 5))

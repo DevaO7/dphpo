@@ -223,12 +223,12 @@ def read_data(number, similarity, dim_pca=None):
     return users, groups, train_data, test_data
 
 
+
 class SyntheticDataset(Dataset):
     def __init__(self, dataset):
         """
         Args:
-            data_path (str): Path to the JSON file containing the data.
-            user_id (str, optional): If the JSON contains multiple users, specify which one to load.
+            dataset: A tuple or list containing (X_data, y_data)
         """
         self.X = dataset[0]
         self.y = dataset[1]
@@ -237,8 +237,11 @@ class SyntheticDataset(Dataset):
         return len(self.y)
 
     def __getitem__(self, idx):
-        return self.X[idx], self.y[idx]
-
+        # Return a dictionary here
+        return {
+            'x': self.X[idx], 
+            'y': self.y[idx]
+        }
 
 
 
