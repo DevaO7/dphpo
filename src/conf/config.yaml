@@ -15,7 +15,7 @@ run_mode:
   compile_results: False
 
 run_settings:
-  rounds: 800
+  rounds: 500
   algorithm: FedAvg
   seed: 0
   use_cuda: True
@@ -30,7 +30,7 @@ tuning:
 server:
   constant_global_step: False
   client_ratio: 0.2
-  local_updates: 5
+  local_updates: 50
   weight_decay: 0.0
   sampling_rate: 0.2
   dp: True

@@ -1,0 +1,7 @@
+Hyperparameter: 0.1
+Avg Best Train Accuracy: 0.0842
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.0828
+Std Test Accuracy: 0.0
+
+Best Hyperparameter: 0.1 with Avg Best Train Accuracy: 0.0842

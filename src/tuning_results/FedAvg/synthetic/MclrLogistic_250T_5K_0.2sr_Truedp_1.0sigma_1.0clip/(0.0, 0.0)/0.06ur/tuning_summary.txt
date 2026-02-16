@@ -1,0 +1,49 @@
+Hyperparameter: 0.1
+Avg Best Train Accuracy: 0.4253
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.426
+Std Test Accuracy: 0.0
+
+Hyperparameter: 0.2
+Avg Best Train Accuracy: 0.5086
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.5095
+Std Test Accuracy: 0.0
+
+Hyperparameter: 0.4
+Avg Best Train Accuracy: 0.5468
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.5479
+Std Test Accuracy: 0.0
+
+Hyperparameter: 0.8
+Avg Best Train Accuracy: 0.5907
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.5911
+Std Test Accuracy: 0.0
+
+Hyperparameter: 1.6
+Avg Best Train Accuracy: 0.5151
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.5153
+Std Test Accuracy: 0.0
+
+Hyperparameter: 3.2
+Avg Best Train Accuracy: 0.6238
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.6248
+Std Test Accuracy: 0.0
+
+Hyperparameter: 6.4
+Avg Best Train Accuracy: 0.6055
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.6063
+Std Test Accuracy: 0.0
+
+Hyperparameter: 12.8
+Avg Best Train Accuracy: 0.5783
+Std Train Accuracy: 0.0
+Avg Best Test Accuracy: 0.5792
+Std Test Accuracy: 0.0
+
+Best Hyperparameter: 3.2 with Avg Best Train Accuracy: 0.6238

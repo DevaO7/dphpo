@@ -1,0 +1,10 @@
+- results.client_ratio_vs_beta=True
+- run_mode.tune_hyperparameter=False
+- run_mode.compile_tuning_results=True
+- tuning.hyperparameter_grid=[0.01,0.02,0.04,0.08,0.16,0.32,0.64]
+- server.dp=True
+- server.local_updates=5
+- server.sampling_rate=0.02
+- server.sigma=10.0
+- server.max_grad_norm=1.0
+- server.client_ratio=0.02
