@@ -1,8 +1,0 @@
-- run_mode.tune_hyperparameter=True
-- run_mode.compile_tuning_results=False
-- server.dp=True
-- server.local_updates=5
-- server.sampling_rate=0.02
-- server.sigma=10.0
-- server.max_grad_norm=1.0
-- server.client_ratio=0.05
