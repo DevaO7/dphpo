@@ -3,6 +3,7 @@ import os
 import csv
 import copy
 import matplotlib.pyplot as plt
+import torch
 
 
 class Server:
@@ -18,12 +19,24 @@ class Server:
         self.dp = dp
         self.num_glob_iters = num_glob_iters
 
-
     def send_parameters(self):
         """Users setting their parameters from the server."""
         assert (self.users is not None and len(self.users) > 0)
         for user in self.users:
             user.set_parameters(self.model)
+    
+    def save_checkpoint(self, glob_iter):
+        checkpoint_path = os.path.join(self.save_path, f"checkpoint.pth")
+        privacy_engine_generator = {}
+        if self.dp:
+            for user in self.users:
+                privacy_engine_generator[user.id] = user.generator.get_state()
+        check_point = {
+            'round': glob_iter,
+            'model_state_dict': self.model.state_dict(),
+            'privacy_engine_generator': privacy_engine_generator
+        }
+        torch.save(check_point, checkpoint_path)
     
     def poisson_sampling(self, data, probabilities, seed):
         """

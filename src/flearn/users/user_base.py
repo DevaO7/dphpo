@@ -15,14 +15,14 @@ class User:
         if dp:
             train_loader = DataLoader(self.traindataset, batch_size=self.batch_size, shuffle=True, drop_last=False)
             self.privacy_engine = PrivacyEngine()
-            generator = torch.Generator(device='cuda' if use_cuda else 'cpu').manual_seed(id)
+            self.generator = torch.Generator(device='cuda' if use_cuda else 'cpu').manual_seed(id)
             self.model, self.optimizer, self.dp_loss, self.dp_train_loader = self.privacy_engine.make_private(
                 module=self.model,
                 optimizer=optimizer,
                 data_loader=train_loader,
                 noise_multiplier=noise_multiplier,
                 max_grad_norm=max_grad_norm,
-                noise_generator=generator, 
+                noise_generator=self.generator, 
                 criterion=loss_fn, 
                 grad_sample_mode="ghost", 
                 loss_reduction="mean"

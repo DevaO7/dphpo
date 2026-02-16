@@ -41,6 +41,7 @@ class FedAvg(Server):
     def train(self):
         for glob_iter in range(self.num_glob_iters):
             print("-------------Round number: ", glob_iter, " -------------")
+            self.save_checkpoint(glob_iter)
             self.send_parameters()
             self.evaluate(glob_iter)
             self.selected_users = self.select_users(glob_iter)
@@ -53,6 +54,8 @@ class FedAvg(Server):
                 else:
                     user.train_no_dp(glob_iter)
             self.aggregate_parameters()
+            if glob_iter % 10 == 0:
+                self.save_checkpoint(glob_iter)
         self.plot_results()
     
     def aggregate_parameters(self):
