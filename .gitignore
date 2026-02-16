@@ -35,8 +35,11 @@ MANIFEST
 src/temp.py
 src/test.py
 data/synthetic/data
-tuning_results/
 logs/
+src/data/MNIST/
+src/data/synthetic/data/
+src/tuning_results/
+
 
 # Installer logs
 pip-log.txt
