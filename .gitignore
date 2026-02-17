@@ -37,6 +37,9 @@ src/test.py
 data/synthetic/data
 tuning_results/
 logs/
+data/
+src/run.sh
+src/conf/config.yaml
 
 # Installer logs
 pip-log.txt
