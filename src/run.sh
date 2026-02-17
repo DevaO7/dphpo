@@ -11,7 +11,7 @@ mkdir -p logs
 trap 'echo; echo "Stopping all background jobs..."; kill 0' SIGINT SIGTERM
 
 LOCAL_UPDATES=50
-SAMPLING_RATE=0.02
+SAMPLING_RATE=0.2
 SIGMA=5.0
 MAX_GRAD_NORM=2.0
 DP=True
@@ -19,18 +19,18 @@ DP=True
 RESULTS=False
 TUNE=True
 
-GPU=6
-HYPERPARAMETER="[0.08]"
+GPU=0
+HYPERPARAMETER="[0.16]"
 LOG_PREFIX="0"
 
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.02 > logs/${LOG_PREFIX}_client_ratio_0.02 2>&1 &
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.04 > logs/${LOG_PREFIX}_client_ratio_0.04 2>&1 &
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.06 > logs/${LOG_PREFIX}_client_ratio_0.06 2>&1 &
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.08 > logs/${LOG_PREFIX}_client_ratio_0.08 2>&1 &
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.1 > logs/${LOG_PREFIX}_client_ratio_0.1 2>&1 &
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.13 > logs/${LOG_PREFIX}_client_ratio_0.13 2>&1 &
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.15 > logs/${LOG_PREFIX}_client_ratio_0.15 2>&1 &
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.17 > logs/${LOG_PREFIX}_client_ratio_0.17 2>&1 &
+# CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.02 > logs/${LOG_PREFIX}_client_ratio_0.02 2>&1 &
+# CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.04 > logs/${LOG_PREFIX}_client_ratio_0.04 2>&1 &
+# CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.06 > logs/${LOG_PREFIX}_client_ratio_0.06 2>&1 &
+# CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.08 > logs/${LOG_PREFIX}_client_ratio_0.08 2>&1 &
+# CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.1 > logs/${LOG_PREFIX}_client_ratio_0.1 2>&1 &
+# CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.13 > logs/${LOG_PREFIX}_client_ratio_0.13 2>&1 &
+# CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.15 > logs/${LOG_PREFIX}_client_ratio_0.15 2>&1 &
+# CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.17 > logs/${LOG_PREFIX}_client_ratio_0.17 2>&1 &
 CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.21 > logs/${LOG_PREFIX}_client_ratio_0.21 2>&1 &
 
 wait
