@@ -7,11 +7,22 @@ import torch
 
 
 class Server:
-    def __init__(self, model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters):
+    def __init__(self, model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, resume=False):
         self.users = []
         self.selected_users = []
         self.use_cuda = use_cuda
-        self.model = copy.deepcopy(model)
+        if resume:
+            checkpoint_path = os.path.join('checkpoints', save_path, f"checkpoint.pth")
+            if os.path.exists(checkpoint_path):
+                self.checkpoint = torch.load(checkpoint_path, map_location='cpu')
+                self.model = copy.deepcopy(model)
+                self.model.load_state_dict(self.checkpoint['model_state_dict'])
+                self.start_iter = self.checkpoint['round'] + 1
+            else:
+                raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
+        else:
+            self.model = copy.deepcopy(model)
+            self.start_iter = 0
         self.similarity = similarity
         self.save_path = save_path
         self.file_name = file_name
@@ -26,18 +37,22 @@ class Server:
             user.set_parameters(self.model)
     
     def save_checkpoint(self, glob_iter):
-        checkpoint_path = os.path.join(self.save_path, f"checkpoint.pth")
+        checkpoint_path = os.path.join('checkpoints', self.save_path, f"checkpoint.pth")
+        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         privacy_engine_generator = {}
+        optimizer_state_dict = {}
         if self.dp:
             for user in self.users:
                 privacy_engine_generator[user.id] = user.generator.get_state()
+                optimizer_state_dict[user.id] = user.optimizer.state_dict()
         check_point = {
             'round': glob_iter,
             'model_state_dict': self.model.state_dict(),
-            'privacy_engine_generator': privacy_engine_generator
+            'privacy_engine_generator': privacy_engine_generator,
+            'optimizer_state_dict': optimizer_state_dict
         }
         torch.save(check_point, checkpoint_path)
-    
+
     def poisson_sampling(self, data, probabilities, seed):
         """
         data: list or array of items

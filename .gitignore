@@ -39,6 +39,7 @@ logs/
 src/data/MNIST/
 src/data/synthetic/data/
 src/tuning_results/
+checkpoints/
 
 
 # Installer logs

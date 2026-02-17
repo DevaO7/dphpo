@@ -3,21 +3,48 @@ from flearn.users.user_avg import UserAVG
 import csv
 import os
 
+def truncate_csv_file(csv_path: str, keep_round: int) -> None:
+    if not os.path.exists(csv_path):
+        return
+    tmp_path = csv_path + ".tmp"
+    with open(csv_path, "r", newline="") as src, open(tmp_path, "w", newline="") as dst:
+        reader = csv.reader(src)
+        writer = csv.writer(dst)
+        header = next(reader, None)
+        if header is not None:
+            writer.writerow(header)
+        for row in reader:
+            if not row:
+                continue
+            try:
+                r = int(row[0])
+            except ValueError:
+                writer.writerow(row)
+                continue
+            if r <= keep_round:
+                writer.writerow(row)
+            else:
+                break
+    os.replace(tmp_path, csv_path)
+
 class FedAvg(Server):
-    def __init__(self, model, train_data_loader, test_data_loader, num_glob_iters, save_path, loss_fn_name, local_learning_rate, global_learning_rate, weight_decay, use_cuda, similarity, file_name, client_ratio, dp, local_updates, sample_rate, noise_multiplier, max_grad_norm, x_label, y_label):
-        super().__init__(model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters)
+    def __init__(self, model, train_data_loader, test_data_loader, num_glob_iters, save_path, loss_fn_name, local_learning_rate, global_learning_rate, weight_decay, use_cuda, similarity, file_name, client_ratio, dp, local_updates, sample_rate, noise_multiplier, max_grad_norm, x_label, y_label, resume=False):
+        super().__init__(model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, resume)
         self.train_data_loader = train_data_loader
         self.test_data_loader = test_data_loader
         
         self.global_learning_rate = global_learning_rate
 
         self.num_users = len(train_data_loader)
-        with open(os.path.join(self.save_path, f"{self.file_name}.csv"), mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(["Round", "Train Loss", "Test Loss", "Train Accuracy", "Test Accuracy"])  # Column Headers
+        if resume:
+            print(f"Resuming from checkpoint at round {self.start_iter}")
+            truncate_csv_file(csv_path=os.path.join(self.save_path, f"{self.file_name}.csv"), keep_round=self.start_iter-1)
+        else:
+            with open(os.path.join(self.save_path, f"{self.file_name}.csv"), mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["Round", "Train Loss", "Test Loss", "Train Accuracy", "Test Accuracy"])  # Column Headers
 
         # Initialize users
-
         for id in range(self.num_users):
             user = UserAVG(
                 id=id,
@@ -34,14 +61,15 @@ class FedAvg(Server):
                 noise_multiplier=noise_multiplier,
                 max_grad_norm=max_grad_norm, 
                 x_label=x_label,
-                y_label=y_label
+                y_label=y_label, 
+                resume=resume, 
+                checkpoint=self.checkpoint if resume else None
             )
             self.users.append(user)
 
     def train(self):
-        for glob_iter in range(self.num_glob_iters):
+        for glob_iter in range(self.start_iter, self.num_glob_iters):
             print("-------------Round number: ", glob_iter, " -------------")
-            self.save_checkpoint(glob_iter)
             self.send_parameters()
             self.evaluate(glob_iter)
             self.selected_users = self.select_users(glob_iter)

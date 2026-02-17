@@ -10,7 +10,7 @@ mkdir -p "$XDG_CACHE_HOME" "$HUGGINGFACE_HUB_CACHE" "$HF_DATASETS_CACHE"
 mkdir -p logs
 trap 'echo; echo "Stopping all background jobs..."; kill 0' SIGINT SIGTERM
 
-LOCAL_UPDATES=5000
+LOCAL_UPDATES=5
 SAMPLING_RATE=0.2
 SIGMA=5.0
 MAX_GRAD_NORM=2.0
@@ -19,7 +19,7 @@ DP=True
 RESULTS=False
 TUNE=True
 
-GPU=0
+GPU=4
 HYPERPARAMETER="[0.16]"
 LOG_PREFIX="0"
 

@@ -211,7 +211,8 @@ def tune_hyperparameters(cfg):
                     noise_multiplier=cfg.server.sigma, 
                     max_grad_norm=cfg.server.max_grad_norm, 
                     x_label=cfg.dataset.x_label,
-                    y_label=cfg.dataset.y_label
+                    y_label=cfg.dataset.y_label, 
+                    resume=cfg.run_settings.resume_from_checkpoint
                 )
                 server.train()
     else:

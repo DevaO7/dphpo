@@ -4,7 +4,7 @@ from opacus import PrivacyEngine
 from torch.utils.data import DataLoader
 
 class User: 
-    def __init__(self, model, train_loader, test_loader, loss_fn_name, use_cuda, local_updates, dp, optimizer, noise_multiplier, max_grad_norm, id, sample_rate, x_label, y_label):
+    def __init__(self, model, train_loader, test_loader, loss_fn_name, use_cuda, local_updates, dp, optimizer, noise_multiplier, max_grad_norm, id, sample_rate, x_label, y_label, resume=False, checkpoint=None):
         self.use_cuda = use_cuda
         self.traindataset = train_loader.dataset
         self.train_samples = len(self.traindataset)
@@ -15,7 +15,11 @@ class User:
         if dp:
             train_loader = DataLoader(self.traindataset, batch_size=self.batch_size, shuffle=True, drop_last=False)
             self.privacy_engine = PrivacyEngine()
-            self.generator = torch.Generator(device='cuda' if use_cuda else 'cpu').manual_seed(id)
+            if resume:
+                self.generator = torch.Generator(device='cuda' if use_cuda else 'cpu')
+                self.generator.set_state(checkpoint['privacy_engine_generator'][id])
+            else:
+                self.generator = torch.Generator(device='cuda' if use_cuda else 'cpu').manual_seed(id)
             self.model, self.optimizer, self.dp_loss, self.dp_train_loader = self.privacy_engine.make_private(
                 module=self.model,
                 optimizer=optimizer,
@@ -27,6 +31,8 @@ class User:
                 grad_sample_mode="ghost", 
                 loss_reduction="mean"
             )
+            if resume:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'][id])
         self.delta_model = [torch.zeros_like(p.data) for p in self.model.parameters() if p.requires_grad]
         self.server_model = [torch.zeros_like(p.data) for p in self.model.parameters() if p.requires_grad]
         self.local_model = copy.deepcopy(list(self.model.parameters()))
