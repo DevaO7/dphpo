@@ -114,17 +114,17 @@ hydra:
     task:
     - run_mode.tune_hyperparameter=True
     - run_mode.compile_tuning_results=False
-    - tuning.hyperparameter_grid=[0.08]
+    - tuning.hyperparameter_grid=[0.16]
     - server.dp=True
     - server.local_updates=50
     - server.sampling_rate=0.02
     - server.sigma=5.0
     - server.max_grad_norm=2.0
-    - server.client_ratio=0.02
+    - server.client_ratio=0.04
   job:
     name: main
     chdir: null
-    override_dirname: run_mode.compile_tuning_results=False,run_mode.tune_hyperparameter=True,server.client_ratio=0.02,server.dp=True,server.local_updates=50,server.max_grad_norm=2.0,server.sampling_rate=0.02,server.sigma=5.0,tuning.hyperparameter_grid=[0.08]
+    override_dirname: run_mode.compile_tuning_results=False,run_mode.tune_hyperparameter=True,server.client_ratio=0.04,server.dp=True,server.local_updates=50,server.max_grad_norm=2.0,server.sampling_rate=0.02,server.sigma=5.0,tuning.hyperparameter_grid=[0.16]
     id: ???
     num: ???
     config_name: config
@@ -138,18 +138,18 @@ hydra:
   runtime:
     version: 1.3.2
     version_base: '1.3'
-    cwd: /ephemeral/praneeth/dsivakumar/deva/dphpo/src
+    cwd: /home/devaganthan.ss/deva/dphpo/src
     config_sources:
     - path: hydra.conf
       schema: pkg
       provider: hydra
-    - path: /ephemeral/praneeth/dsivakumar/deva/dphpo/src/conf
+    - path: /home/devaganthan.ss/deva/dphpo/src/conf
       schema: file
       provider: main
     - path: ''
       schema: structured
       provider: schema
-    output_dir: /ephemeral/praneeth/dsivakumar/deva/dphpo/src/tuning_results/FedAvg/flwrlabs/femnist/CNN_FEMNIST_500T_50K_0.02sr_Truedp_5.0sigma_2.0clip
+    output_dir: /home/devaganthan.ss/deva/dphpo/src/tuning_results/FedAvg/flwrlabs/femnist/CNN_FEMNIST_500T_50K_0.02sr_Truedp_5.0sigma_2.0clip
     choices:
       dataset: femnist
       hydra/env: default

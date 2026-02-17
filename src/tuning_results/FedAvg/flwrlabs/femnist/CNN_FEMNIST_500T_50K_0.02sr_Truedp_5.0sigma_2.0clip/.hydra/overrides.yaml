@@ -1,9 +1,9 @@
 - run_mode.tune_hyperparameter=True
 - run_mode.compile_tuning_results=False
-- tuning.hyperparameter_grid=[0.08]
+- tuning.hyperparameter_grid=[0.16]
 - server.dp=True
 - server.local_updates=50
 - server.sampling_rate=0.02
 - server.sigma=5.0
 - server.max_grad_norm=2.0
-- server.client_ratio=0.02
+- server.client_ratio=0.04

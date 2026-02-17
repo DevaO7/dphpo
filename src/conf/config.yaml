@@ -15,7 +15,7 @@ run_mode:
   compile_results: False
 
 run_settings:
-  rounds: 500
+  rounds: 1500
   algorithm: FedAvg
   seed: 0
   use_cuda: True
