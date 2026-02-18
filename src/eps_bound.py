@@ -261,42 +261,45 @@ def plot_comparison(parameter_varied, T, sigma, K, M, R, l, s):
     plt.savefig(f'comparison_epsilon_{parameter_varied}_2.png')
     
 if __name__ == "__main__":
-    T = 250
-    sigma = 10
-    K = 5
-    M = 100
-    R = int(0.8 * 5000)
-    l = 0.2
+    T = 500
+    sigma = 5
+    K = 50
+    M = 40
+    R = 2000
+    l = 0.21
     s = 0.2
     delta = 1 / (M * R)
+    eps_num = compute_epsilon_numerical(T, K, M, R, l, s, sigma)
+    print(f"Epsilon (Numerical Accounting): {eps_num:.2f}")
 
-    T_values = np.arange(2, 1000, 25)
-    l_values = np.arange(0.01, 1, 0.01)
-    eps_values_num = []
-    with open('epsilon_values_numerical_T_l.csv', 'w') as f:
-        writer = csv.writer(f)
-        writer.writerow(['T', 'l', 'Epsilon Numerical'])
 
-    for T in T_values:
-        for l in l_values:
-            eps_num = round(compute_epsilon_numerical(T=int(T), K=int(K), M=100, R=int(0.8*5000), l=l, s=0.2, sigma_gaussian=int(sigma)), 2)
-            with open('epsilon_values_numerical_T_l.csv', 'a') as f:
-                writer = csv.writer(f)
-                writer.writerow([int(T), l, eps_num])
-            eps_values_num.append(eps_num)
+    # T_values = np.arange(2, 1000, 25)
+    # l_values = np.arange(0.01, 1, 0.01)
+    # eps_values_num = []
+    # with open('epsilon_values_numerical_T_l.csv', 'w') as f:
+    #     writer = csv.writer(f)
+    #     writer.writerow(['T', 'l', 'Epsilon Numerical'])
+
+    # for T in T_values:
+    #     for l in l_values:
+    #         eps_num = round(compute_epsilon_numerical(T=int(T), K=int(K), M=100, R=int(0.8*5000), l=l, s=0.2, sigma_gaussian=int(sigma)), 2)
+    #         with open('epsilon_values_numerical_T_l.csv', 'a') as f:
+    #             writer = csv.writer(f)
+    #             writer.writerow([int(T), l, eps_num])
+    #         eps_values_num.append(eps_num)
     
-    # 3d plot
-    from mpl_toolkits.mplot3d import Axes3D
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    T_grid, l_grid = np.meshgrid(T_values, l_values)
-    eps_grid = np.array(eps_values_num).reshape(len(l_values), len(T_values))
-    ax.plot_surface(T_grid, l_grid, eps_grid, cmap='viridis')
-    ax.set_xlabel('T')
-    ax.set_ylabel('l')
-    ax.set_zlabel('Epsilon')
-    plt.title('Epsilon DP Bound vs T and l (Numerical Accounting)')
-    plt.savefig('epsilon_dp_bound_vs_T_l_numerical.png')
+    # # 3d plot
+    # from mpl_toolkits.mplot3d import Axes3D
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111, projection='3d')
+    # T_grid, l_grid = np.meshgrid(T_values, l_values)
+    # eps_grid = np.array(eps_values_num).reshape(len(l_values), len(T_values))
+    # ax.plot_surface(T_grid, l_grid, eps_grid, cmap='viridis')
+    # ax.set_xlabel('T')
+    # ax.set_ylabel('l')
+    # ax.set_zlabel('Epsilon')
+    # plt.title('Epsilon DP Bound vs T and l (Numerical Accounting)')
+    # plt.savefig('epsilon_dp_bound_vs_T_l_numerical.png')
 
 
     # plot_comparison('T', T, sigma, K, M, R, l, s)

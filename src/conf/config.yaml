@@ -1,5 +1,5 @@
 defaults:
-  - dataset: mnist
+  - dataset: femnist
   - _self_
 
 hydra:
@@ -15,12 +15,12 @@ run_mode:
   compile_results: False
 
 run_settings:
-  rounds: 15
+  rounds: 500
   algorithm: FedAvg
   seed: 0
   use_cuda: True
   visualize_data_partition: False
-  resume_from_checkpoint: True
+  resume_from_checkpoint: False
 
 tuning:
   cross_validation: True
