@@ -2,7 +2,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data import DataLoader, random_split
 from data.synthetic.data_generator import SyntheticDataset, read_data
 import os
 from typing import Callable, Dict, Tuple, Optional, List, Union
@@ -12,6 +12,7 @@ from flwr_datasets import FederatedDataset
 from torchvision.transforms import ToTensor
 import matplotlib.pyplot as plt
 import numpy as np
+from data.synthetic.data_generator import generate_synthetic as generate_synthetic_dataset
 
 
 @dataclass
@@ -232,26 +233,6 @@ def visualize_partition(cfg, train_data_loader, test_data_loader, save_path):
         save_path=save_path
     )
 
-
-
-def read_user_data(index, raw_data, dataset):
-    """Returns:
-        id: id of user
-        train_data: list of (data, labels) for training
-        test_data: list of (data, labels) for testing
-    """
-    id = raw_data[0][index]
-    data = raw_data[1][id]
-    X, y = data['x'],  data['y']
-    if dataset == "CIFAR-10":
-        X = torch.as_tensor(X).view(-1, 3, 32, 32).type(torch.float32)
-        y = torch.as_tensor(y).type(torch.int64)
-    else:
-        # image flattened for FEMNIST, MNIST
-        X = torch.as_tensor(X).type(torch.float32)
-        y = torch.as_tensor(y).type(torch.int64)
-    return id, (X, y)
-
 def get_loader_flwr(cfg):
     """
     Loads the raw global datasets.
@@ -281,19 +262,6 @@ def get_loader_flwr(cfg):
 
     return client_train_loaders, client_test_loaders
 
-def get_per_client_loader(cfg, data):
-    # For FL Experiments
-    data_loader = []
-    print('Per-client data loaders being created...')
-    for user_id in range(cfg.dataset.nb_users):
-        _, user_train_data = read_user_data(user_id, data, cfg.dataset.name)
-        dataset = SyntheticDataset(dataset=user_train_data)
-        g = torch.Generator().manual_seed(cfg.run_settings.seed + user_id)
-        # This is to account for DP sampling
-        train_loader = DataLoader(dataset, batch_size=cfg.dataset.batch_size, shuffle=True, generator=g, drop_last=False, num_workers=4, pin_memory=True)
-        data_loader.append(train_loader)
-    return data_loader
-
 def get_global_loader(cfg, data):
     # For Find_Optimum
     data_X = []
@@ -310,19 +278,29 @@ def get_global_loader(cfg, data):
     return global_loader
 
 def get_loader_from_raw_data(cfg, per_client_loader=True):
-    if cfg.dataset.iid:
-        similarity = "iid"
-    else:
-        similarity = str((cfg.dataset.alpha, cfg.dataset.beta))
-    user_ids, _, train_data, test_data = read_data(number=str(cfg.dataset.number), similarity=similarity, dim_pca=None)
-    if per_client_loader: 
-        train_data_loader = get_per_client_loader(cfg, (user_ids, train_data))
-        test_data_loader = get_per_client_loader(cfg, (user_ids, test_data))
-    else: 
-        train_data_loader = get_global_loader(cfg, (user_ids, train_data))
-        test_data_loader = get_global_loader(cfg, (user_ids, test_data))
-    return train_data_loader, test_data_loader
-        
+    X_split, y_split = generate_synthetic_dataset(alpha=cfg.dataset.alpha, 
+                                   beta=cfg.dataset.beta,
+                                   iid=cfg.dataset.iid,
+                                   num_user=cfg.dataset.nb_users,
+                                   num_class=cfg.dataset.dim_output,
+                                   input_dim=cfg.dataset.dim_input,
+                                   num_samples_per_user=cfg.dataset.num_samples,
+                                   cluster_seed=cfg.dataset.cluster_seed,
+                                   data_seed=cfg.dataset.data_seed
+                            )
+    client_test_loaders = []
+    client_train_loaders = []
+    train_size = int(cfg.dataset.num_samples * 0.8)
+    for user_id in range(cfg.dataset.nb_users):
+        user_data = (torch.as_tensor(X_split[user_id]), torch.as_tensor(y_split[user_id], dtype=torch.long))
+        dataset = SyntheticDataset(dataset=user_data)
+        g = torch.Generator().manual_seed(cfg.run_settings.seed + user_id)
+        train_dataset, test_dataset = random_split(dataset, [train_size, len(dataset) - train_size], generator=g)
+        train_loader = DataLoader(train_dataset, batch_size=cfg.dataset.batch_size, shuffle=True, generator=g, drop_last=False, num_workers=4, pin_memory=True)
+        test_loader = DataLoader(test_dataset, batch_size=cfg.dataset.batch_size, shuffle=False, generator=g, drop_last=False, num_workers=4, pin_memory=True)
+        client_train_loaders.append(train_loader)
+        client_test_loaders.append(test_loader)
+    return client_train_loaders, client_test_loaders
 
 def get_data_loaders(cfg, train=True, per_client_loader=True):
     """

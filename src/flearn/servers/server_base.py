@@ -123,7 +123,7 @@ class Server:
             writer = csv.writer(file)
             writer.writerow([glob_iter, train_loss, test_loss, train_acc, glob_acc])
     
-    def plot_graph(self, data, label='Train Loss', output_dir=None):
+    def plot_graph(self, data, label, output_dir):
         rounds = np.arange(self.num_glob_iters)
         plt.figure()
         plt.plot(rounds, data)

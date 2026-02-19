@@ -164,9 +164,11 @@ def tune_hyperparameters(cfg):
     else:
         model = getattr(models, cfg.dataset.model_name)()
 
-    loss_fn = getattr(torch.nn, cfg.dataset.loss_fn)(reduction='mean')
     if cfg.dataset.name == 'synthetic':
-        similarity = (cfg.dataset.alpha, cfg.dataset.beta)
+        if cfg.dataset.iid:
+            similarity = 'iid'
+        else:
+            similarity = (cfg.dataset.alpha, cfg.dataset.beta)
     else:
         similarity = cfg.dataset.similarity
     if cfg.tuning.cross_validation:
