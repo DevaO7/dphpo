@@ -1,0 +1,11 @@
+- run_mode.tune_hyperparameter=True
+- run_mode.compile_tuning_results=False
+- tuning.hyperparameter_grid=[20.48]
+- run_settings.resume_from_checkpoint=True
+- server.dp=True
+- server.local_updates=50
+- server.sampling_rate=0.2
+- server.constant_global_step=False
+- server.sigma=5.0
+- server.max_grad_norm=2.0
+- server.client_ratio=0.21
