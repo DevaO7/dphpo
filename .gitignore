@@ -40,8 +40,10 @@ src/data/MNIST/
 src/data/synthetic/data/
 src/tuning_results/
 checkpoints/
-
-
+src/job.sh
+src/run.sh
+src/dump
+src/temp
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
