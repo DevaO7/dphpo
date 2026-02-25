@@ -63,7 +63,10 @@ def find_optimum(cfg, train_loader, test_loader, epochs=1000, log_interval=50, l
 
 def compile_tuning_results(cfg):
     if cfg.dataset.name == 'synthetic':
-        similarity = (cfg.dataset.alpha, cfg.dataset.beta)
+        if cfg.dataset.iid:
+            similarity = 'iid'
+        else:
+            similarity = (cfg.dataset.alpha, cfg.dataset.beta)
     else:
         similarity = cfg.dataset.similarity
     client_ratios = {}
@@ -73,11 +76,14 @@ def compile_tuning_results(cfg):
             results = {}
             best_hyperparameter = None
             best_accuracy = 0.0
+            best_loss = float('inf')
             for hyperparameter in cfg.tuning.hyperparameter_grid:
                 results[hyperparameter] = {}
                 save_path = os.path.join(cfg.tuning.save_path, str(similarity), f"{client_ratio}ur", f"{hyperparameter}beta")
                 best_test_accuracy = []
                 best_train_accuracy = []
+                best_train_loss = []
+                best_test_loss = []
                 for fold in range(cfg.tuning.cv_folds):
                     file_name = f"fold_{fold}"
                     with open(os.path.join(save_path, f"{file_name}.csv"), mode='r') as file:
@@ -94,11 +100,18 @@ def compile_tuning_results(cfg):
                             test_losses.append(float(row[2]))       # Test Loss is the 3rd column
                         best_test_accuracy.append(max(test_accuracies))
                         best_train_accuracy.append(max(train_accuracies))
+                        best_train_loss.append(min(train_losses))
+                        best_test_loss.append(min(test_losses))
                 avg_best_test_accuracy = sum(best_test_accuracy) / len(best_test_accuracy)
                 avg_best_train_accuracy = sum(best_train_accuracy) / len(best_train_accuracy)
+                avg_best_train_loss = sum(best_train_loss) / len(best_train_loss)
+                avg_best_test_loss = sum(best_test_loss) / len(best_test_loss)
                 std_train_accuracy = np.std(best_train_accuracy)
                 std_test_accuracy = np.std(best_test_accuracy)
-                if avg_best_train_accuracy > best_accuracy:
+                if cfg.tuning.metric == 'train_loss' and avg_best_train_loss < best_loss:
+                    best_loss = avg_best_train_loss
+                    best_hyperparameter = hyperparameter
+                elif cfg.tuning.metric == 'train_accuracy' and avg_best_train_accuracy > best_accuracy:
                     best_accuracy = avg_best_train_accuracy
                     best_hyperparameter = hyperparameter
                 results[hyperparameter]['test_accuracy'] = test_accuracies
@@ -109,6 +122,8 @@ def compile_tuning_results(cfg):
                 results[hyperparameter]['avg_best_train_accuracy'] = round(avg_best_train_accuracy, 4)
                 results[hyperparameter]['std_train_accuracy'] = round(std_train_accuracy, 4)
                 results[hyperparameter]['std_test_accuracy'] = round(std_test_accuracy, 4)
+                results[hyperparameter]['avg_best_train_loss'] = round(avg_best_train_loss, 4)
+                results[hyperparameter]['avg_best_test_loss'] = round(avg_best_test_loss, 4)
                 client_ratios[client_ratio] = results
 
             print('Writing tuning summary to file and plotting results...')
@@ -121,8 +136,13 @@ def compile_tuning_results(cfg):
                     file.write(f"Std Train Accuracy: {metrics['std_train_accuracy']}\n")
                     file.write(f"Avg Best Test Accuracy: {metrics['avg_best_test_accuracy']}\n")
                     file.write(f"Std Test Accuracy: {metrics['std_test_accuracy']}\n")
+                    file.write(f"Avg Best Train Loss: {metrics['avg_best_train_loss']}\n")
+                    file.write(f"Avg Best Test Loss: {metrics['avg_best_test_loss']}\n")
                     file.write("\n")
-                file.write(f"Best Hyperparameter: {best_hyperparameter} with Avg Best Train Accuracy: {round(best_accuracy, 4)}\n")
+                if cfg.tuning.metric == 'train_loss':
+                    file.write(f"Best Hyperparameter: {best_hyperparameter} with Avg Best {cfg.tuning.metric}: {round(best_loss, 4)}\n")
+                elif cfg.tuning.metric == 'train_accuracy':
+                    file.write(f"Best Hyperparameter: {best_hyperparameter} with Avg Best {cfg.tuning.metric}: {round(best_accuracy, 4)}\n")
             for metric in evaluation_metrics:
                 plt.figure()
                 for hyperparameter in cfg.tuning.hyperparameter_grid:
@@ -174,12 +194,15 @@ def tune_hyperparameters(cfg):
     if cfg.tuning.cross_validation:
         for hyperparameter in cfg.tuning.hyperparameter_grid:
             print(f"Tuning hyperparameter: {hyperparameter}")
-            if cfg.server.constant_global_step:
+            if cfg.server.constant_global_step == 'Fixed':
                 global_step = cfg.server.global_step_size
                 local_step = hyperparameter
-            else:
+            elif cfg.server.constant_global_step == 'Adaptive':
                 global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
                 local_step = hyperparameter/(cfg.server.local_updates*global_step)
+            elif cfg.server.constant_global_step == 'Heuristic':
+                global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
+                local_step = hyperparameter*((cfg.server.client_ratio)**(2/3))/(cfg.server.local_updates*global_step)
             
             #TODO: Save Path needs to be updated according to hyperparameter and fold
             save_path = os.path.join(cfg.tuning.save_path, str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")

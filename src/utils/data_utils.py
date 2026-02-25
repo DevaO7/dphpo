@@ -3,7 +3,7 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
-from data.synthetic.data_generator import SyntheticDataset, read_data
+from data.synthetic.data_generator import SyntheticDataset
 import os
 from typing import Callable, Dict, Tuple, Optional, List, Union
 from dataclasses import dataclass
@@ -296,8 +296,8 @@ def get_loader_from_raw_data(cfg, per_client_loader=True):
         dataset = SyntheticDataset(dataset=user_data)
         g = torch.Generator().manual_seed(cfg.run_settings.seed + user_id)
         train_dataset, test_dataset = random_split(dataset, [train_size, len(dataset) - train_size], generator=g)
-        train_loader = DataLoader(train_dataset, batch_size=cfg.dataset.batch_size, shuffle=True, generator=g, drop_last=False, num_workers=4, pin_memory=True)
-        test_loader = DataLoader(test_dataset, batch_size=cfg.dataset.batch_size, shuffle=False, generator=g, drop_last=False, num_workers=4, pin_memory=True)
+        train_loader = DataLoader(train_dataset, batch_size=cfg.dataset.batch_size, shuffle=True, generator=g, drop_last=False)
+        test_loader = DataLoader(test_dataset, batch_size=cfg.dataset.batch_size, shuffle=False, generator=g, drop_last=False)
         client_train_loaders.append(train_loader)
         client_test_loaders.append(test_loader)
     return client_train_loaders, client_test_loaders
