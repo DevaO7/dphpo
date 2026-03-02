@@ -31,10 +31,10 @@ HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
 # HYPERPARAMETER="[2.0,2.5,3.0]"
 PARAMETER_TO_TUNE="clipping"
 LOG_PREFIX="0"
-TUNING_METHOD=cross_validation
+TUNING_METHOD=early_stopping
 MIN_RESOURCE=10
 ELIMINATION_RATE=2
-CLIENT_RATIOS="[0.02,0.04,0.06,0.08,0.1,0.15,0.17,0.21]"
+CLIENT_RATIOS="[0.1,0.02]"
 ALPHA=1.0
 BETA=1.0
 
@@ -53,7 +53,7 @@ CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py \
                         tuning.type=$TUNING_METHOD \
                         tuning.min_resource=$MIN_RESOURCE \
                         tuning.elimination_rate=$ELIMINATION_RATE \
-                        results.client_ratios=$CLIENT_RATIOS \
+                        results.transfer_parameters=$CLIENT_RATIOS \
                         dataset.alpha=$ALPHA \
                         dataset.beta=$BETA \
                         run_settings.rounds=$ROUNDS \

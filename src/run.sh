@@ -23,8 +23,9 @@ TUNING_TYPE=cross_validation
 TUNING_PARAMETER=step_size
 
 # ─── Defaults (used unless overridden below) ─────────────────────────────────
-DEFAULT_GPU=7
-DEFAULT_HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+DEFAULT_GPU=4
+# DEFAULT_HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+DEFAULT_HYPERPARAMETER="[0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
 DEFAULT_RESUME=False
 
 # ─── Sweep definitions ────────────────────────────────────────────────────────
@@ -38,14 +39,14 @@ declare -A SIGMA_GPU=(
     # ["10.0"]=4
 )
 declare -A SIGMA_HYPERPARAMETER=(
-    ["50.0"]="[0.0025]"
+    # ["50.0"]="[0.0025]"
 )
 declare -A SIGMA_RESUME=(
-    ["5.0"]=True
-    ["10.0"]=True
-    ["30.0"]=True
-    ["40.0"]=True
-    ["50.0"]=True
+    # ["5.0"]=True
+    # ["10.0"]=True
+    # ["30.0"]=True
+    # ["40.0"]=True
+    # ["50.0"]=True
 )
 
 # Per-client_ratio overrides (uncomment / add as needed):

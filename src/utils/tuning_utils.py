@@ -1,13 +1,15 @@
 import numpy as np
 import os
 import matplotlib.pyplot as plt
+import csv
 
-def perform_early_stopping_analysis(cfg, client_ratios, save_path):
+def perform_early_stopping_analysis(cfg, loaded_results, save_path):
+    os.makedirs(save_path, exist_ok=True)
     if cfg.tuning.early_stopping_resource == "rounds":
         print("Performing early stopping analysis based on rounds...")
-        for client_ratio in client_ratios:
-            with open(os.path.join(save_path, f"{client_ratio}ur", f"early_stopping_stage.txt"), mode='w', newline='') as file:
-                file.write(f"Starting early stopping analysis for client ratio: {client_ratio}\n")
+        for parameter_varied in loaded_results:
+            with open(os.path.join(save_path, f"early_stopping_summary_{parameter_varied}_{cfg.results.transfer_mode}.txt"), mode='w', newline='') as file:
+                file.write(f"Starting early stopping analysis for client ratio: {parameter_varied}\n")
             results = {}
             stage = 1
             candidate_hyperparameters = cfg.tuning.hyperparameter_grid.copy()
@@ -18,17 +20,17 @@ def perform_early_stopping_analysis(cfg, client_ratios, save_path):
                     end += (2**(stage-1)) * cfg.tuning.min_resource
                 else:
                     end = cfg.run_settings.rounds
-                with open(os.path.join(save_path, f"{client_ratio}ur", f"early_stopping_stage.txt"), mode='a', newline='') as file:
+                with open(os.path.join(save_path, f"early_stopping_summary_{parameter_varied}_{cfg.results.transfer_mode}.txt"), mode='a', newline='') as file:
                     file.write(f"Stage {stage}: Evaluating up to round {end} with candidate hyperparameters: {candidate_hyperparameters}\n")
                     for hyperparameter in candidate_hyperparameters:
                         if cfg.tuning.metric == 'train_loss':
-                            intermediate_results[hyperparameter] = np.mean([min(client_ratios[client_ratio][hyperparameter][fold]['train_loss'][:end]) for fold in range(cfg.tuning.cv_folds)])
+                            intermediate_results[hyperparameter] = np.mean([min(loaded_results[parameter_varied][hyperparameter][fold]['train_loss'][:end]) for fold in range(cfg.tuning.cv_folds)])
                             file.write(f"Hyperparameter: {hyperparameter}, Intermediate Train Loss: {intermediate_results[hyperparameter]}\n")
-                            results[hyperparameter] = np.mean([np.array(client_ratios[client_ratio][hyperparameter][fold]['train_loss'][:end]) for fold in range(cfg.tuning.cv_folds)], axis=0)
+                            results[hyperparameter] = np.mean([np.array(loaded_results[parameter_varied][hyperparameter][fold]['train_loss'][:end]) for fold in range(cfg.tuning.cv_folds)], axis=0)
                         elif cfg.tuning.metric == 'train_accuracy':
-                            intermediate_results[hyperparameter] = np.mean([max(client_ratios[client_ratio][hyperparameter][fold]['train_accuracy'][:end]) for fold in range(cfg.tuning.cv_folds)])
+                            intermediate_results[hyperparameter] = np.mean([max(loaded_results[parameter_varied][hyperparameter][fold]['train_accuracy'][:end]) for fold in range(cfg.tuning.cv_folds)])
                             file.write(f"Hyperparameter: {hyperparameter}, Intermediate Train Accuracy: {intermediate_results[hyperparameter]}\n")
-                            results[hyperparameter] = np.mean([np.array(client_ratios[client_ratio][hyperparameter][fold]['train_accuracy'][:end]) for fold in range(cfg.tuning.cv_folds)], axis=0)
+                            results[hyperparameter] = np.mean([np.array(loaded_results[parameter_varied][hyperparameter][fold]['train_accuracy'][:end]) for fold in range(cfg.tuning.cv_folds)], axis=0)
                 if cfg.tuning.metric == 'train_loss':
                     candidate_hyperparameters = dict(sorted(intermediate_results.items(), key=lambda item: item[1])[:round(len(candidate_hyperparameters)/cfg.tuning.elimination_rate)]).keys()
                 elif cfg.tuning.metric == 'train_accuracy':
@@ -39,10 +41,10 @@ def perform_early_stopping_analysis(cfg, client_ratios, save_path):
                 plt.plot(results[hyperparameter], label=f"{cfg.tuning.parameter_to_tune}: {hyperparameter}")
             plt.xlabel("Communication Round")
             plt.ylabel(cfg.tuning.metric.replace('_', ' ').title())
-            plt.title(f"{cfg.tuning.metric.replace('_', ' ').title()} vs Communication Rounds for Client Ratio: {client_ratio}")
+            plt.title(f"{cfg.tuning.metric.replace('_', ' ').title()} vs Communication Rounds for {cfg.results.transfer_mode}: {parameter_varied}")
             plt.legend()
             plt.tight_layout()
-            plt.savefig(os.path.join(save_path, f"{client_ratio}ur", f"early_stopping_{cfg.tuning.metric.lower().replace(' ', '_')}_analysis.png"))
+            plt.savefig(os.path.join(save_path, f"early_stopping_{cfg.tuning.metric.lower().replace(' ', '_')}_analysis_{cfg.results.transfer_mode}_{parameter_varied}.png"))
             plt.close()
 
 
@@ -50,22 +52,23 @@ def perform_early_stopping_analysis(cfg, client_ratios, save_path):
         print("Performing early stopping analysis based on client sampling...")
         raise NotImplementedError("Early stopping based on client sampling is not implemented yet.")
 
-def perform_simple_cross_validation_analysis(cfg, client_ratios, similarity, evaluation_metrics, save_path):
+def perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, evaluation_metrics, save_path):
     print("Performing simple cross-validation analysis...")
-    for client_ratio in client_ratios:
+    os.makedirs(os.path.join(save_path, "cross_validation"), exist_ok=True)
+    for parameter_varied in loaded_results:
         best_hyperparameter = None
         best_accuracy = 0.0
         best_loss = float('inf')
-        for hyperparameter in client_ratios[client_ratio]:
+        for hyperparameter in loaded_results[parameter_varied]:
             best_test_accuracy = []
             best_train_accuracy = []
             best_train_loss = []
             best_test_loss = []
             for fold in range(cfg.tuning.cv_folds):
-                best_test_accuracy.append(max(client_ratios[client_ratio][hyperparameter][fold]['test_accuracy']))
-                best_train_accuracy.append(max(client_ratios[client_ratio][hyperparameter][fold]['train_accuracy']))
-                best_train_loss.append(min(client_ratios[client_ratio][hyperparameter][fold]['train_loss']))
-                best_test_loss.append(min(client_ratios[client_ratio][hyperparameter][fold]['test_loss']))
+                best_test_accuracy.append(max(loaded_results[parameter_varied][hyperparameter][fold]['test_accuracy']))
+                best_train_accuracy.append(max(loaded_results[parameter_varied][hyperparameter][fold]['train_accuracy']))
+                best_train_loss.append(min(loaded_results[parameter_varied][hyperparameter][fold]['train_loss']))
+                best_test_loss.append(min(loaded_results[parameter_varied][hyperparameter][fold]['test_loss']))
             avg_best_test_accuracy = np.mean(best_test_accuracy)
             avg_best_train_accuracy = np.mean(best_train_accuracy)
             avg_best_train_loss = np.mean(best_train_loss)
@@ -80,18 +83,18 @@ def perform_simple_cross_validation_analysis(cfg, client_ratios, similarity, eva
             elif cfg.tuning.metric == 'train_accuracy' and avg_best_train_accuracy > best_accuracy:
                 best_accuracy = avg_best_train_accuracy
                 best_hyperparameter = hyperparameter
-            client_ratios[client_ratio][hyperparameter][fold]['avg_best_test_accuracy'] = round(avg_best_test_accuracy, 4)
-            client_ratios[client_ratio][hyperparameter][fold]['avg_best_train_accuracy'] = round(avg_best_train_accuracy, 4)
-            client_ratios[client_ratio][hyperparameter][fold]['std_train_accuracy'] = round(std_best_train_accuracy, 4)
-            client_ratios[client_ratio][hyperparameter][fold]['std_test_accuracy'] = round(std_best_test_accuracy, 4)
-            client_ratios[client_ratio][hyperparameter][fold]['avg_best_train_loss'] = round(avg_best_train_loss, 4)
-            client_ratios[client_ratio][hyperparameter][fold]['avg_best_test_loss'] = round(avg_best_test_loss, 4)
+            loaded_results[parameter_varied][hyperparameter][fold]['avg_best_test_accuracy'] = round(avg_best_test_accuracy, 4)
+            loaded_results[parameter_varied][hyperparameter][fold]['avg_best_train_accuracy'] = round(avg_best_train_accuracy, 4)
+            loaded_results[parameter_varied][hyperparameter][fold]['std_train_accuracy'] = round(std_best_train_accuracy, 4)
+            loaded_results[parameter_varied][hyperparameter][fold]['std_test_accuracy'] = round(std_best_test_accuracy, 4)
+            loaded_results[parameter_varied][hyperparameter][fold]['avg_best_train_loss'] = round(avg_best_train_loss, 4)
+            loaded_results[parameter_varied][hyperparameter][fold]['avg_best_test_loss'] = round(avg_best_test_loss, 4)
         print('Writing tuning summary to file and plotting results...')
             # Plot and write it to a file
         for fold in range(cfg.tuning.cv_folds):
-            with open(os.path.join(save_path, f"{client_ratio}ur", f"tuning_summary_{fold}.txt"), mode='w', newline='') as file:
-                for hyperparameter in client_ratios[client_ratio]:
-                    metrics = client_ratios[client_ratio][hyperparameter][fold]
+            with open(os.path.join(save_path, f"tuning_summary_{fold}_{parameter_varied}_{cfg.results.transfer_mode}.txt"), mode='w', newline='') as file:
+                for hyperparameter in loaded_results[parameter_varied]:
+                    metrics = loaded_results[parameter_varied][hyperparameter][fold]
                     file.write(f"Hyperparameter: {hyperparameter}\n")
                     file.write(f"Avg Best Train Accuracy: {metrics['avg_best_train_accuracy']}\n")
                     file.write(f"Std Train Accuracy: {metrics['std_train_accuracy']}\n")
@@ -108,32 +111,70 @@ def perform_simple_cross_validation_analysis(cfg, client_ratios, similarity, eva
                 plt.figure()
                 for hyperparameter in cfg.tuning.hyperparameter_grid:
                     if metric == 'train_accuracy':
-                        plt.plot(client_ratios[client_ratio][hyperparameter][fold]['train_accuracy'], label=f"Beta: {hyperparameter}")
+                        plt.plot(loaded_results[parameter_varied][hyperparameter][fold]['train_accuracy'], label=f"Beta: {hyperparameter}")
                     elif metric == 'test_accuracy':
-                        plt.plot(client_ratios[client_ratio][hyperparameter][fold]['test_accuracy'], label=f"Beta: {hyperparameter}")
+                        plt.plot(loaded_results[parameter_varied][hyperparameter][fold]['test_accuracy'], label=f"Beta: {hyperparameter}")
                     elif metric == 'train_loss':
-                        plt.plot(client_ratios[client_ratio][hyperparameter][fold]['train_loss'], label=f"Beta: {hyperparameter}")
+                        plt.plot(loaded_results[parameter_varied][hyperparameter][fold]['train_loss'], label=f"Beta: {hyperparameter}")
                     elif metric == 'test_loss':
-                        plt.plot(client_ratios[client_ratio][hyperparameter][fold]['test_loss'], label=f"Beta: {hyperparameter}")
+                        plt.plot(loaded_results[parameter_varied][hyperparameter][fold]['test_loss'], label=f"Beta: {hyperparameter}")
                 plt.xlabel("Communication Round")
                 plt.ylabel(metric)
                 plt.title(f"{metric} vs Communication Rounds")
                 plt.legend()
                 plt.tight_layout()
-                plt.savefig(os.path.join(save_path, f"{client_ratio}ur", f"{metric.lower().replace(' ', '_')}_comparison_{fold}.png"))
+                plt.savefig(os.path.join(save_path, f"{metric.lower().replace(' ', '_')}_comparison_{fold}_{parameter_varied}_{cfg.results.transfer_mode}.png"))
                 plt.close()
 
     for fold in range(cfg.tuning.cv_folds):
         for metric in evaluation_metrics:
             for hyperparameter in cfg.tuning.hyperparameter_grid:
                 plt.figure()
-                for client_ratio in cfg.results.client_ratios:
-                    plt.plot(client_ratios[client_ratio][hyperparameter][fold][metric], label=f"Client Ratio: {client_ratio}")
+                for parameter_varied in loaded_results:
+                    plt.plot(loaded_results[parameter_varied][hyperparameter][fold][metric], label=f"{cfg.results.transfer_mode}: {parameter_varied}")
                 plt.xlabel("Communication Round")
                 plt.ylabel(metric)
                 plt.title(f"{metric} vs Communication Rounds for Hyperparameter: {hyperparameter}")
                 plt.legend()
                 plt.tight_layout()
-                plt.savefig(os.path.join(save_path, f"client_ratio_comparison_{metric.lower().replace(' ', '_')}_hyperparameter_{hyperparameter}_{fold}.png"))
+                plt.savefig(os.path.join(save_path, f"{cfg.results.transfer_mode}_comparison_{metric.lower().replace(' ', '_')}_hyperparameter_{hyperparameter}_{fold}.png"))
                 plt.close()
-                    
+
+def load_results(cfg, save_path):
+    loaded_results = {}
+    # Loading the results
+    for parameter_varied in cfg.results.transfer_parameters:
+        loaded_results[parameter_varied] = {}
+        for hyperparameter in cfg.tuning.hyperparameter_grid:
+            loaded_results[parameter_varied][hyperparameter] = {}
+            if cfg.results.transfer_mode == 'client_ratio':
+                if cfg.tuning.parameter_to_tune == 'step_size':
+                    dir_path = os.path.join(save_path, f"{parameter_varied}ur", f"{hyperparameter}beta")
+                elif cfg.tuning.parameter_to_tune == 'clipping':
+                    dir_path = os.path.join(save_path, f"{parameter_varied}ur", f"{hyperparameter}clipping")
+            elif cfg.results.transfer_mode == 'sigma':
+                if cfg.tuning.parameter_to_tune == 'step_size':
+                    dir_path = os.path.join(save_path+f"_{parameter_varied}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(cfg.dataset.similarity), f"{cfg.server.client_ratio}",f"{hyperparameter}beta")
+                elif cfg.tuning.parameter_to_tune == 'clipping':
+                    dir_path = os.path.join(save_path+f'_{parameter_varied}sigma_global_step_{cfg.server.constant_global_step}', str(cfg.dataset.similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+            for fold in range(cfg.tuning.cv_folds):
+                loaded_results[parameter_varied][hyperparameter][fold] = {}
+                file_name = f"fold_{fold}"
+                print(f"Loading results for {cfg.results.transfer_mode}: {parameter_varied}, Hyperparameter: {hyperparameter}, Fold: {fold}")
+                with open(os.path.join(dir_path, f"{file_name}.csv"), mode='r') as file:
+                    reader = csv.reader(file)
+                    next(reader)  # Skip header row
+                    test_accuracies = []
+                    train_accuracies = []
+                    train_losses = []
+                    test_losses = []
+                    for row in reader:
+                        test_accuracies.append(float(row[4]))  # Test Accuracy is the 5th column
+                        train_accuracies.append(float(row[3]))  # Train Accuracy is the 4th column
+                        train_losses.append(float(row[1]))      # Train Loss is the 2nd column
+                        test_losses.append(float(row[2]))       # Test Loss is the 3rd column
+                    loaded_results[parameter_varied][hyperparameter][fold]['test_accuracy'] = test_accuracies
+                    loaded_results[parameter_varied][hyperparameter][fold]['train_accuracy'] = train_accuracies
+                    loaded_results[parameter_varied][hyperparameter][fold]['train_loss'] = train_losses
+                    loaded_results[parameter_varied][hyperparameter][fold]['test_loss'] = test_losses
+    return loaded_results

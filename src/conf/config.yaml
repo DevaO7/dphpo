@@ -29,7 +29,7 @@ tuning:
   elimination_rate: 2
   cv_folds: 1
   hyperparameter_grid: [0.5]
-  save_path: tuning_results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp_${server.sigma}sigma
+  save_path: tuning_results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp
   metric: train_loss
 
 server:
@@ -46,7 +46,9 @@ server:
 
 results:
   client_ratio_vs_beta: True
-  client_ratios: [0.1,0.13,0.15,0.17,0.21]
+  transfer_mode: client_ratio
+  transfer_parameters: [0.1,0.13,0.15,0.17,0.21]
+  result_path: results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}
 
   # [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8]
   # [0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12]

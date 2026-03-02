@@ -1,7 +1,7 @@
 from flearn.trainmodel import models
 from flearn.servers.server_avg import FedAvg
 from utils.data_utils import get_data_loaders, visualize_partition
-from utils.tuning_utils import perform_early_stopping_analysis, perform_simple_cross_validation_analysis
+from utils.tuning_utils import perform_early_stopping_analysis, perform_simple_cross_validation_analysis, load_results
 import torch
 import numpy as np
 import os
@@ -70,47 +70,29 @@ def compile_tuning_results(cfg):
             similarity = (cfg.dataset.alpha, cfg.dataset.beta)
     else:
         similarity = cfg.dataset.similarity
-    client_ratios = {}
     evaluation_metrics = ['test_accuracy', 'test_loss', 'train_accuracy', 'train_loss']
-    if cfg.tuning.parameter_to_tune == 'step_size':
-        save_path = os.path.join(cfg.tuning.save_path+f'_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}', str(similarity))
-    elif cfg.tuning.parameter_to_tune == 'clipping':
-        save_path = os.path.join(cfg.tuning.save_path+f'_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step))
-    # Loading the results
-    for client_ratio in cfg.results.client_ratios:
-        client_ratios[client_ratio] = {}
-        for hyperparameter in cfg.tuning.hyperparameter_grid:
-            client_ratios[client_ratio][hyperparameter] = {}
-            if cfg.tuning.parameter_to_tune == 'step_size':
-                dir_path = os.path.join(save_path, f"{client_ratio}ur", f"{hyperparameter}beta")
-            elif cfg.tuning.parameter_to_tune == 'clipping':
-                dir_path = os.path.join(save_path, f"{client_ratio}ur", f"{hyperparameter}clipping")
-            for fold in range(cfg.tuning.cv_folds):
-                client_ratios[client_ratio][hyperparameter][fold] = {}
-                file_name = f"fold_{fold}"
-                print(f"Loading results for Client Ratio: {client_ratio}, Hyperparameter: {hyperparameter}, Fold: {fold}")
-                with open(os.path.join(dir_path, f"{file_name}.csv"), mode='r') as file:
-                    reader = csv.reader(file)
-                    next(reader)  # Skip header row
-                    test_accuracies = []
-                    train_accuracies = []
-                    train_losses = []
-                    test_losses = []
-                    for row in reader:
-                        test_accuracies.append(float(row[4]))  # Test Accuracy is the 5th column
-                        train_accuracies.append(float(row[3]))  # Train Accuracy is the 4th column
-                        train_losses.append(float(row[1]))      # Train Loss is the 2nd column
-                        test_losses.append(float(row[2]))       # Test Loss is the 3rd column
-                    client_ratios[client_ratio][hyperparameter][fold]['test_accuracy'] = test_accuracies
-                    client_ratios[client_ratio][hyperparameter][fold]['train_accuracy'] = train_accuracies
-                    client_ratios[client_ratio][hyperparameter][fold]['train_loss'] = train_losses
-                    client_ratios[client_ratio][hyperparameter][fold]['test_loss'] = test_losses
+    if cfg.results.transfer_mode == 'client_ratio':
+        result_path = os.path.join(cfg.results.result_path, str(similarity), cfg.server.constant_global_step, "client_ratio_comparison")
+    elif cfg.results.transfer_mode == 'sigma':
+        result_path = os.path.join(cfg.results.result_path, str(similarity), cfg.server.constant_global_step, "sigma_comparison")
+
+    if cfg.results.transfer_mode=='client_ratio':
+        if cfg.tuning.parameter_to_tune == 'step_size':
+            save_path = os.path.join(cfg.tuning.save_path+f'_{cfg.server.sigma}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}', str(similarity))
+        elif cfg.tuning.parameter_to_tune == 'clipping':
+            save_path = os.path.join(cfg.tuning.save_path+f'_{cfg.server.sigma}sigma_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step))
+    elif cfg.results.transfer_mode=='sigma':
+        save_path = os.path.join(cfg.tuning.save_path)
+    else:
+        raise ValueError(f"Unsupported transfer mode: {cfg.results.transfer_mode}")
+
+    loaded_results = load_results(cfg, save_path)
 
     if cfg.tuning.type=='cross_validation':
-        perform_simple_cross_validation_analysis(cfg, client_ratios, similarity, evaluation_metrics, save_path)
+        perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, evaluation_metrics, os.path.join(result_path, "cross_validation"))
     elif cfg.tuning.type=='early_stopping':
-        perform_early_stopping_analysis(cfg, client_ratios, save_path)
-                    
+        perform_early_stopping_analysis(cfg, loaded_results, os.path.join(result_path, "early_stopping"))
+
 
 
 def tune_hyperparameters(cfg):
@@ -142,7 +124,7 @@ def tune_hyperparameters(cfg):
                     global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
                     local_step = hyperparameter*((cfg.server.client_ratio)**(2/3))/(cfg.server.local_updates*global_step)
                 clipping_value = cfg.server.max_grad_norm
-                save_path = os.path.join(cfg.tuning.save_path+f'_{clipping_value}clip_constant_global_step_{cfg.server.constant_global_step}', str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
+                save_path = os.path.join(cfg.tuning.save_path+f'_{cfg.server.sigma}sigma_{clipping_value}clip_constant_global_step_{cfg.server.constant_global_step}', str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
                 os.makedirs(save_path, exist_ok=True)
             elif cfg.tuning.parameter_to_tune == 'clipping':
                 print(f"Tuning clipping constant: {hyperparameter}")
@@ -156,7 +138,7 @@ def tune_hyperparameters(cfg):
                 elif cfg.server.constant_global_step == 'Heuristic':
                     global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
                     local_step = cfg.server.local_step*((cfg.server.client_ratio)**(2/3))/(cfg.server.local_updates*global_step)
-                save_path = os.path.join(cfg.tuning.save_path+f'_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{clipping_value}clipping")
+                save_path = os.path.join(cfg.tuning.save_path+f'_{cfg.server.sigma}sigma_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{clipping_value}clipping")
             os.makedirs(save_path, exist_ok=True)
             for fold in range(cfg.tuning.cv_folds):
                 #TODO Load appropriate Data Loaders according to fold
