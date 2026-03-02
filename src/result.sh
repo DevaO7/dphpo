@@ -14,18 +14,51 @@ LOCAL_UPDATES=50
 SAMPLING_RATE=0.2
 SIGMA=20.0
 MAX_GRAD_NORM=2.0
+LOCAL_STEP_SIZE=2.56
 DP=True
+ROUNDS=150
+SIMILARITY=null
 
 RESULTS=True
 TUNE=False
-GLOBAL_STEP_SIZE=False
+GLOBAL_STEP_SIZE=Heuristic
 GPU=5
+# HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28,2.56,5.12,10.24,20.48,40.96]"
 # HYPERPARAMETER="[0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64]"
 # HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02]"
-HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+# HYPERPARAMETER="[1.28]"
+HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
+# HYPERPARAMETER="[2.0,2.5,3.0]"
+PARAMETER_TO_TUNE="clipping"
 LOG_PREFIX="0"
+TUNING_METHOD=cross_validation
+MIN_RESOURCE=10
+ELIMINATION_RATE=2
+CLIENT_RATIOS="[0.02,0.04,0.06,0.08,0.1,0.15,0.17,0.21]"
+ALPHA=1.0
+BETA=1.0
 
-CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py server.constant_global_step=$GLOBAL_STEP_SIZE run_mode.tune_hyperparameter=$TUNE run_mode.compile_tuning_results=$RESULTS tuning.hyperparameter_grid=$HYPERPARAMETER server.dp=$DP server.local_updates=$LOCAL_UPDATES server.sampling_rate=$SAMPLING_RATE server.sigma=$SIGMA server.max_grad_norm=$MAX_GRAD_NORM server.client_ratio=0.02
+CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py \
+                        server.constant_global_step=$GLOBAL_STEP_SIZE \
+                        run_mode.tune_hyperparameter=$TUNE \
+                        run_mode.compile_tuning_results=$RESULTS \
+                        tuning.hyperparameter_grid=$HYPERPARAMETER \
+                        server.dp=$DP \
+                        server.local_updates=$LOCAL_UPDATES \
+                        server.sampling_rate=$SAMPLING_RATE \
+                        server.sigma=$SIGMA \
+                        server.max_grad_norm=$MAX_GRAD_NORM \
+                        server.client_ratio=0.02 \
+                        tuning.parameter_to_tune=$PARAMETER_TO_TUNE \
+                        tuning.type=$TUNING_METHOD \
+                        tuning.min_resource=$MIN_RESOURCE \
+                        tuning.elimination_rate=$ELIMINATION_RATE \
+                        results.client_ratios=$CLIENT_RATIOS \
+                        dataset.alpha=$ALPHA \
+                        dataset.beta=$BETA \
+                        run_settings.rounds=$ROUNDS \
+                        dataset.similarity=$SIMILARITY \
+                        server.local_step=$LOCAL_STEP_SIZE \
 
 wait
 echo "All jobs finished"

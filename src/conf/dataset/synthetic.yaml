@@ -6,6 +6,7 @@ dim_input: 60
 dim_output: 10
 alpha: 1.0
 beta: 1.0
+similarity: 
 ratio_training: 0.8
 iid: False
 batch_size: 400

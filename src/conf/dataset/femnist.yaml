@@ -10,3 +10,5 @@ x_label: image
 y_label: character
 loss_fn: CrossEntropyLoss
 max_samples_per_client: 2500
+alpha:
+beta:

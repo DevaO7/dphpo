@@ -4,7 +4,7 @@ defaults:
 
 hydra:
   run:
-    dir: tuning_results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp_${server.sigma}sigma_${server.max_grad_norm}clip_constant_global_step_${server.constant_global_step}
+    dir: tuning_results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp_${server.sigma}sigma
 
 run_mode:
   find_optimum: False
@@ -22,26 +22,31 @@ run_settings:
   resume_from_checkpoint: False
 
 tuning:
-  cross_validation: True
+  parameter_to_tune: clipping
+  type: early_stopping
+  early_stopping_resource: rounds
+  min_resource: 10
+  elimination_rate: 2
   cv_folds: 1
-  hyperparameter_grid: [0.1]
-  save_path: tuning_results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp_${server.sigma}sigma_${server.max_grad_norm}clip_constant_global_step_${server.constant_global_step}
+  hyperparameter_grid: [0.5]
+  save_path: tuning_results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp_${server.sigma}sigma
   metric: train_loss
 
 server:
   constant_global_step: Heuristic
-  global_step_size: 1.0
-  client_ratio: 0.01
+  global_step: 
+  local_step: 2.56
+  client_ratio: 0.02
   local_updates: 50
   weight_decay: 0.0
   sampling_rate: 0.2
   dp: True
   sigma: 5.0
-  max_grad_norm: 2.0
+  max_grad_norm: 
 
 results:
   client_ratio_vs_beta: True
-  client_ratios: [0.02,0.04,0.06,0.08,0.1,0.13,0.15,0.17,0.21]
+  client_ratios: [0.1,0.13,0.15,0.17,0.21]
 
   # [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8]
   # [0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12]

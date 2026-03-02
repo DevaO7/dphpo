@@ -1,6 +1,7 @@
 from flearn.trainmodel import models
 from flearn.servers.server_avg import FedAvg
 from utils.data_utils import get_data_loaders, visualize_partition
+from utils.tuning_utils import perform_early_stopping_analysis, perform_simple_cross_validation_analysis
 import torch
 import numpy as np
 import os
@@ -71,109 +72,44 @@ def compile_tuning_results(cfg):
         similarity = cfg.dataset.similarity
     client_ratios = {}
     evaluation_metrics = ['test_accuracy', 'test_loss', 'train_accuracy', 'train_loss']
+    if cfg.tuning.parameter_to_tune == 'step_size':
+        save_path = os.path.join(cfg.tuning.save_path+f'_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}', str(similarity))
+    elif cfg.tuning.parameter_to_tune == 'clipping':
+        save_path = os.path.join(cfg.tuning.save_path+f'_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step))
+    # Loading the results
     for client_ratio in cfg.results.client_ratios:
-        if cfg.tuning.cross_validation:
-            results = {}
-            best_hyperparameter = None
-            best_accuracy = 0.0
-            best_loss = float('inf')
-            for hyperparameter in cfg.tuning.hyperparameter_grid:
-                results[hyperparameter] = {}
-                save_path = os.path.join(cfg.tuning.save_path, str(similarity), f"{client_ratio}ur", f"{hyperparameter}beta")
-                best_test_accuracy = []
-                best_train_accuracy = []
-                best_train_loss = []
-                best_test_loss = []
-                for fold in range(cfg.tuning.cv_folds):
-                    file_name = f"fold_{fold}"
-                    with open(os.path.join(save_path, f"{file_name}.csv"), mode='r') as file:
-                        reader = csv.reader(file)
-                        next(reader)  # Skip header row
-                        test_accuracies = []
-                        train_accuracies = []
-                        train_losses = []
-                        test_losses = []
-                        for row in reader:
-                            test_accuracies.append(float(row[4]))  # Test Accuracy is the 5th column
-                            train_accuracies.append(float(row[3]))  # Train Accuracy is the 4th column
-                            train_losses.append(float(row[1]))      # Train Loss is the 2nd column
-                            test_losses.append(float(row[2]))       # Test Loss is the 3rd column
-                        best_test_accuracy.append(max(test_accuracies))
-                        best_train_accuracy.append(max(train_accuracies))
-                        best_train_loss.append(min(train_losses))
-                        best_test_loss.append(min(test_losses))
-                avg_best_test_accuracy = sum(best_test_accuracy) / len(best_test_accuracy)
-                avg_best_train_accuracy = sum(best_train_accuracy) / len(best_train_accuracy)
-                avg_best_train_loss = sum(best_train_loss) / len(best_train_loss)
-                avg_best_test_loss = sum(best_test_loss) / len(best_test_loss)
-                std_train_accuracy = np.std(best_train_accuracy)
-                std_test_accuracy = np.std(best_test_accuracy)
-                if cfg.tuning.metric == 'train_loss' and avg_best_train_loss < best_loss:
-                    best_loss = avg_best_train_loss
-                    best_hyperparameter = hyperparameter
-                elif cfg.tuning.metric == 'train_accuracy' and avg_best_train_accuracy > best_accuracy:
-                    best_accuracy = avg_best_train_accuracy
-                    best_hyperparameter = hyperparameter
-                results[hyperparameter]['test_accuracy'] = test_accuracies
-                results[hyperparameter]['train_accuracy'] = train_accuracies
-                results[hyperparameter]['train_loss'] = train_losses
-                results[hyperparameter]['test_loss'] = test_losses
-                results[hyperparameter]['avg_best_test_accuracy'] = round(avg_best_test_accuracy, 4)
-                results[hyperparameter]['avg_best_train_accuracy'] = round(avg_best_train_accuracy, 4)
-                results[hyperparameter]['std_train_accuracy'] = round(std_train_accuracy, 4)
-                results[hyperparameter]['std_test_accuracy'] = round(std_test_accuracy, 4)
-                results[hyperparameter]['avg_best_train_loss'] = round(avg_best_train_loss, 4)
-                results[hyperparameter]['avg_best_test_loss'] = round(avg_best_test_loss, 4)
-                client_ratios[client_ratio] = results
+        client_ratios[client_ratio] = {}
+        for hyperparameter in cfg.tuning.hyperparameter_grid:
+            client_ratios[client_ratio][hyperparameter] = {}
+            if cfg.tuning.parameter_to_tune == 'step_size':
+                dir_path = os.path.join(save_path, f"{client_ratio}ur", f"{hyperparameter}beta")
+            elif cfg.tuning.parameter_to_tune == 'clipping':
+                dir_path = os.path.join(save_path, f"{client_ratio}ur", f"{hyperparameter}clipping")
+            for fold in range(cfg.tuning.cv_folds):
+                client_ratios[client_ratio][hyperparameter][fold] = {}
+                file_name = f"fold_{fold}"
+                print(f"Loading results for Client Ratio: {client_ratio}, Hyperparameter: {hyperparameter}, Fold: {fold}")
+                with open(os.path.join(dir_path, f"{file_name}.csv"), mode='r') as file:
+                    reader = csv.reader(file)
+                    next(reader)  # Skip header row
+                    test_accuracies = []
+                    train_accuracies = []
+                    train_losses = []
+                    test_losses = []
+                    for row in reader:
+                        test_accuracies.append(float(row[4]))  # Test Accuracy is the 5th column
+                        train_accuracies.append(float(row[3]))  # Train Accuracy is the 4th column
+                        train_losses.append(float(row[1]))      # Train Loss is the 2nd column
+                        test_losses.append(float(row[2]))       # Test Loss is the 3rd column
+                    client_ratios[client_ratio][hyperparameter][fold]['test_accuracy'] = test_accuracies
+                    client_ratios[client_ratio][hyperparameter][fold]['train_accuracy'] = train_accuracies
+                    client_ratios[client_ratio][hyperparameter][fold]['train_loss'] = train_losses
+                    client_ratios[client_ratio][hyperparameter][fold]['test_loss'] = test_losses
 
-            print('Writing tuning summary to file and plotting results...')
-            # Plot and write it to a file
-            with open(os.path.join(cfg.tuning.save_path, str(similarity), f"{client_ratio}ur", "tuning_summary.txt"), mode='w', newline='') as file:
-                for hyperparameter, metrics in results.items():
-
-                    file.write(f"Hyperparameter: {hyperparameter}\n")
-                    file.write(f"Avg Best Train Accuracy: {metrics['avg_best_train_accuracy']}\n")
-                    file.write(f"Std Train Accuracy: {metrics['std_train_accuracy']}\n")
-                    file.write(f"Avg Best Test Accuracy: {metrics['avg_best_test_accuracy']}\n")
-                    file.write(f"Std Test Accuracy: {metrics['std_test_accuracy']}\n")
-                    file.write(f"Avg Best Train Loss: {metrics['avg_best_train_loss']}\n")
-                    file.write(f"Avg Best Test Loss: {metrics['avg_best_test_loss']}\n")
-                    file.write("\n")
-                if cfg.tuning.metric == 'train_loss':
-                    file.write(f"Best Hyperparameter: {best_hyperparameter} with Avg Best {cfg.tuning.metric}: {round(best_loss, 4)}\n")
-                elif cfg.tuning.metric == 'train_accuracy':
-                    file.write(f"Best Hyperparameter: {best_hyperparameter} with Avg Best {cfg.tuning.metric}: {round(best_accuracy, 4)}\n")
-            for metric in evaluation_metrics:
-                plt.figure()
-                for hyperparameter in cfg.tuning.hyperparameter_grid:
-                    if metric == 'train_accuracy':
-                        plt.plot(results[hyperparameter]['train_accuracy'], label=f"Beta: {hyperparameter}")
-                    elif metric == 'test_accuracy':
-                        plt.plot(results[hyperparameter]['test_accuracy'], label=f"Beta: {hyperparameter}")
-                    elif metric == 'train_loss':
-                        plt.plot(results[hyperparameter]['train_loss'], label=f"Beta: {hyperparameter}")
-                    elif metric == 'test_loss':
-                        plt.plot(results[hyperparameter]['test_loss'], label=f"Beta: {hyperparameter}")
-                plt.xlabel("Communication Round")
-                plt.ylabel(metric)
-                plt.title(f"{metric} vs Communication Rounds")
-                plt.legend()
-                plt.tight_layout()
-                plt.savefig(os.path.join(cfg.tuning.save_path, str(similarity), f"{client_ratio}ur", f"{metric.lower().replace(' ', '_')}_comparison.png"))
-                plt.close()
-    if cfg.tuning.cross_validation and cfg.results.client_ratio_vs_beta:
-        for metric in evaluation_metrics:
-            for hyperparameter in cfg.tuning.hyperparameter_grid:
-                plt.figure()
-                for client_ratio in cfg.results.client_ratios:
-                    plt.plot(client_ratios[client_ratio][hyperparameter][metric], label=f"Client Ratio: {client_ratio}")
-                plt.xlabel("Communication Round")
-                plt.ylabel(metric)
-                plt.title(f"{metric} vs Communication Rounds for Hyperparameter: {hyperparameter}")
-                plt.legend()
-                plt.tight_layout()
-                plt.savefig(os.path.join(cfg.tuning.save_path, str(similarity), f"client_ratio_comparison_{metric.lower().replace(' ', '_')}_hyperparameter_{hyperparameter}.png"))
-                plt.close()
+    if cfg.tuning.type=='cross_validation':
+        perform_simple_cross_validation_analysis(cfg, client_ratios, similarity, evaluation_metrics, save_path)
+    elif cfg.tuning.type=='early_stopping':
+        perform_early_stopping_analysis(cfg, client_ratios, save_path)
                     
 
 
@@ -191,23 +127,37 @@ def tune_hyperparameters(cfg):
             similarity = (cfg.dataset.alpha, cfg.dataset.beta)
     else:
         similarity = cfg.dataset.similarity
-    if cfg.tuning.cross_validation:
+    if cfg.tuning.type=='cross_validation':
         for hyperparameter in cfg.tuning.hyperparameter_grid:
             print(f"Tuning hyperparameter: {hyperparameter}")
-            if cfg.server.constant_global_step == 'Fixed':
-                global_step = cfg.server.global_step_size
-                local_step = hyperparameter
-            elif cfg.server.constant_global_step == 'Adaptive':
-                global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
-                local_step = hyperparameter/(cfg.server.local_updates*global_step)
-            elif cfg.server.constant_global_step == 'Heuristic':
-                global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
-                local_step = hyperparameter*((cfg.server.client_ratio)**(2/3))/(cfg.server.local_updates*global_step)
-            
-            #TODO: Save Path needs to be updated according to hyperparameter and fold
-            save_path = os.path.join(cfg.tuning.save_path, str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
+            if cfg.tuning.parameter_to_tune == 'step_size':
+                print(f"Tuning local step_size: {hyperparameter}")
+                if cfg.server.constant_global_step == 'Fixed':
+                    global_step = cfg.server.global_step_size
+                    local_step = hyperparameter
+                elif cfg.server.constant_global_step == 'Adaptive':
+                    global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
+                    local_step = hyperparameter/(cfg.server.local_updates*global_step)
+                elif cfg.server.constant_global_step == 'Heuristic':
+                    global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
+                    local_step = hyperparameter*((cfg.server.client_ratio)**(2/3))/(cfg.server.local_updates*global_step)
+                clipping_value = cfg.server.max_grad_norm
+                save_path = os.path.join(cfg.tuning.save_path+f'_${clipping_value}clip_constant_global_step_${cfg.server.constant_global_step}', str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
+                os.makedirs(save_path, exist_ok=True)
+            elif cfg.tuning.parameter_to_tune == 'clipping':
+                print(f"Tuning clipping constant: {hyperparameter}")
+                clipping_value = hyperparameter
+                if cfg.server.constant_global_step == 'Fixed':
+                    global_step = cfg.server.global_step
+                    local_step = cfg.server.local_step
+                elif cfg.server.constant_global_step == 'Adaptive':
+                    global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
+                    local_step = cfg.server.local_step/(cfg.server.local_updates*global_step)
+                elif cfg.server.constant_global_step == 'Heuristic':
+                    global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
+                    local_step = cfg.server.local_step*((cfg.server.client_ratio)**(2/3))/(cfg.server.local_updates*global_step)
+                save_path = os.path.join(cfg.tuning.save_path+f'_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{clipping_value}clipping")
             os.makedirs(save_path, exist_ok=True)
-
             for fold in range(cfg.tuning.cv_folds):
                 #TODO Load appropriate Data Loaders according to fold
                 train_data_loader, test_data_loader = get_data_loaders(cfg, per_client_loader=True)
@@ -234,7 +184,7 @@ def tune_hyperparameters(cfg):
                     local_updates=cfg.server.local_updates, 
                     sample_rate=cfg.server.sampling_rate, 
                     noise_multiplier=cfg.server.sigma, 
-                    max_grad_norm=cfg.server.max_grad_norm, 
+                    max_grad_norm=clipping_value, 
                     x_label=cfg.dataset.x_label,
                     y_label=cfg.dataset.y_label, 
                     resume=cfg.run_settings.resume_from_checkpoint
