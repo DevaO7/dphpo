@@ -133,7 +133,7 @@ def tune_hyperparameters(cfg):
             if cfg.tuning.parameter_to_tune == 'step_size':
                 print(f"Tuning local step_size: {hyperparameter}")
                 if cfg.server.constant_global_step == 'Fixed':
-                    global_step = cfg.server.global_step_size
+                    global_step = cfg.server.global_step
                     local_step = hyperparameter
                 elif cfg.server.constant_global_step == 'Adaptive':
                     global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
@@ -142,7 +142,7 @@ def tune_hyperparameters(cfg):
                     global_step = (cfg.server.client_ratio*cfg.dataset.nb_users)**0.5
                     local_step = hyperparameter*((cfg.server.client_ratio)**(2/3))/(cfg.server.local_updates*global_step)
                 clipping_value = cfg.server.max_grad_norm
-                save_path = os.path.join(cfg.tuning.save_path+f'_${clipping_value}clip_constant_global_step_${cfg.server.constant_global_step}', str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
+                save_path = os.path.join(cfg.tuning.save_path+f'_{clipping_value}clip_constant_global_step_${cfg.server.constant_global_step}', str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
                 os.makedirs(save_path, exist_ok=True)
             elif cfg.tuning.parameter_to_tune == 'clipping':
                 print(f"Tuning clipping constant: {hyperparameter}")
