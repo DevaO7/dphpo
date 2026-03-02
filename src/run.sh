@@ -19,20 +19,18 @@ DP=True
 RESULTS=False
 TUNE=True
 GLOBAL_STEP_SIZE=Adaptive
-RESUME=False
 TUNING_TYPE=cross_validation
 TUNING_PARAMETER=step_size
 
-# ─── Default GPU and hyperparameter grid (used unless overridden below) ───────
+# ─── Defaults (used unless overridden below) ─────────────────────────────────
 DEFAULT_GPU=7
 DEFAULT_HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+DEFAULT_RESUME=False
 
 # ─── Sweep definitions ────────────────────────────────────────────────────────
 # Each entry in SIGMA_LIST / CLIENT_RATIO_LIST defines one axis of the sweep.
 #
-# To override GPU or HYPERPARAMETER for a specific sigma value, add an entry to
-# SIGMA_GPU or SIGMA_HYPERPARAMETER (key = sigma value, value = override).
-# Similarly for client_ratio overrides via CLIENT_RATIO_GPU / CLIENT_RATIO_HYPERPARAMETER.
+# Override priority (highest to lowest): client_ratio > sigma > default
 #
 # Per-sigma overrides (uncomment / add as needed):
 declare -A SIGMA_GPU=(
@@ -40,7 +38,14 @@ declare -A SIGMA_GPU=(
     # ["10.0"]=4
 )
 declare -A SIGMA_HYPERPARAMETER=(
-    # ["5.0"]="[0.001,0.01,0.1,1.0]"
+    ["50.0"]="[0.0025]"
+)
+declare -A SIGMA_RESUME=(
+    ["5.0"]=True
+    ["10.0"]=True
+    ["30.0"]=True
+    ["40.0"]=True
+    ["50.0"]=True
 )
 
 # Per-client_ratio overrides (uncomment / add as needed):
@@ -51,9 +56,12 @@ declare -A CLIENT_RATIO_GPU=(
 declare -A CLIENT_RATIO_HYPERPARAMETER=(
     # ["0.02"]="[0.005,0.01,0.02]"
 )
+declare -A CLIENT_RATIO_RESUME=(
+    # ["0.21"]=True
+)
 
 # Sweep values
-SIGMA_LIST=(5.0 10.0 20.0 30.0 40.0 50.0)
+SIGMA_LIST=(5.0 10.0 30.0 40.0 50.0)
 CLIENT_RATIO_LIST=(0.21)
 
 # ─── Launch jobs ─────────────────────────────────────────────────────────────
@@ -78,9 +86,18 @@ for SIGMA in "${SIGMA_LIST[@]}"; do
             HYPERPARAMETER="$DEFAULT_HYPERPARAMETER"
         fi
 
+        # Resolve RESUME: client_ratio override > sigma override > default
+        if [[ -n "${CLIENT_RATIO_RESUME[$CLIENT_RATIO]+_}" ]]; then
+            RESUME="${CLIENT_RATIO_RESUME[$CLIENT_RATIO]}"
+        elif [[ -n "${SIGMA_RESUME[$SIGMA]+_}" ]]; then
+            RESUME="${SIGMA_RESUME[$SIGMA]}"
+        else
+            RESUME="$DEFAULT_RESUME"
+        fi
+
         LOG="logs/sigma_${SIGMA}_client_ratio_${CLIENT_RATIO}"
 
-        echo "Launching: sigma=${SIGMA}, client_ratio=${CLIENT_RATIO}, gpu=${GPU}"
+        echo "Launching: sigma=${SIGMA}, client_ratio=${CLIENT_RATIO}, gpu=${GPU}, resume=${RESUME}"
 
         CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py \
             server.constant_global_step=$GLOBAL_STEP_SIZE \
