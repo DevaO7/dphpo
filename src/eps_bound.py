@@ -91,7 +91,9 @@ def intermediate_epsilon_rdp_bound_for_int_alpha(alpha: int, K, s, sigma_gaussia
     Returns an upper RDP epsilon bound after K composed s-subsampled Gaussian mechanisms.
     """
     if numerical:
-        return numerical_rdp_accounting(alpha, K, s, sigma_gaussian_actual)
+        subsampled_gaussian_rdp = numerical_rdp_accounting(alpha, K, s, sigma_gaussian_actual)
+        gaussian_rdp = K*RDP_epsilon_bound_gaussian(alpha, sigma_gaussian_actual)
+        return min(subsampled_gaussian_rdp, gaussian_rdp)
     else: 
         return K * cgf_subsampling_for_int_alpha(
         alpha, RDP_epsilon_bound_gaussian, s, K=None, s=None, sigma_gaussian=sigma_gaussian_actual
@@ -105,10 +107,11 @@ def epsilon_rdp_bound_for_int_alpha(alpha: int, T, K, l, s, sigma_gaussian_actua
 
     Returns an upper RDP epsilon bound after T composed l-subsampled [K composed s-subsampled Gaussian mechanisms].
     """
-    return T * cgf_subsampling_for_int_alpha(
+    subsampled_eps = cgf_subsampling_for_int_alpha(
         alpha, intermediate_epsilon_rdp_bound_for_int_alpha, l, K, s, sigma_gaussian_actual, numerical
     ) / (alpha - 1)
-
+    eps = intermediate_epsilon_rdp_bound_for_int_alpha(alpha, K, s, sigma_gaussian_actual, numerical)
+    return T * min(subsampled_eps, eps)
 
 def epsilon_rdp_bound_for_float_alpha(alpha: float, T, K, l, s, sigma_gaussian_actual, numerical):
     """
@@ -191,7 +194,8 @@ def compute_epsilon_numerical(T, K, M, R, l, s, sigma_gaussian):
     # alpha_int_max: int
     # n_points: int
     delta = 1 / (M * R)
-    sigma_gaussian_actual = sigma_gaussian * np.sqrt(l * M)
+    sigma_gaussian_actual = sigma_gaussian 
+    # sigma_gaussian_actual = sigma_gaussian * np.sqrt(l * M)
 
     # 1. Determine the integer alpha with the best DP bound (grid search between 2 and alpha_int_max)
     alpha_int_max = 100
@@ -215,6 +219,7 @@ def compute_epsilon_numerical(T, K, M, R, l, s, sigma_gaussian):
         for alpha_float in alpha_float_space
     ])
     alpha_float_min = alpha_float_space[idx_min]
+    print(f"Best integer alpha: {alpha_int_min}")
     return epsilon_dp_bound_for_float_alpha(alpha_float_min, T, K, l, s, delta, sigma_gaussian_actual, numerical=True)
 
 
@@ -261,13 +266,13 @@ def plot_comparison(parameter_varied, T, sigma, K, M, R, l, s):
     plt.savefig(f'comparison_epsilon_{parameter_varied}_2.png')
     
 if __name__ == "__main__":
-    T = 30
-    sigma = 5
+    T = 150
+    sigma = 20
     K = 50
-    M = 40
-    R = 2000
-    l = 0.08
-    s = 0.2
+    M = 100
+    R = 400
+    l = 0.21
+    s = 0.0675
     delta = 1 / (M * R)
     eps_num = compute_epsilon_numerical(T, K, M, R, l, s, sigma)
     print(f"Epsilon (Numerical Accounting): {eps_num:.2f}")
