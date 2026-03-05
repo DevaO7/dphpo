@@ -4,7 +4,7 @@ defaults:
 
 hydra:
   run:
-    dir: tuning_results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp_${server.sigma}sigma
+    dir: dump
 
 run_mode:
   find_optimum: False

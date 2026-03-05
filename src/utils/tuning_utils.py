@@ -54,7 +54,7 @@ def perform_early_stopping_analysis(cfg, loaded_results, save_path):
 
 def perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, evaluation_metrics, save_path):
     print("Performing simple cross-validation analysis...")
-    os.makedirs(os.path.join(save_path, "cross_validation"), exist_ok=True)
+    os.makedirs(save_path, exist_ok=True)
     for parameter_varied in loaded_results:
         best_hyperparameter = None
         best_accuracy = 0.0
@@ -140,7 +140,7 @@ def perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, ev
                 plt.savefig(os.path.join(save_path, f"{cfg.results.transfer_mode}_comparison_{metric.lower().replace(' ', '_')}_hyperparameter_{hyperparameter}_{fold}.png"))
                 plt.close()
 
-def load_results(cfg, save_path):
+def load_results(cfg, save_path, similarity):
     loaded_results = {}
     # Loading the results
     for parameter_varied in cfg.results.transfer_parameters:
@@ -154,9 +154,9 @@ def load_results(cfg, save_path):
                     dir_path = os.path.join(save_path, f"{parameter_varied}ur", f"{hyperparameter}clipping")
             elif cfg.results.transfer_mode == 'sigma':
                 if cfg.tuning.parameter_to_tune == 'step_size':
-                    dir_path = os.path.join(save_path+f"_{parameter_varied}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(cfg.dataset.similarity), f"{cfg.server.client_ratio}",f"{hyperparameter}beta")
+                    dir_path = os.path.join(save_path+f"_{parameter_varied}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(similarity), f"{cfg.server.client_ratio}ur",f"{hyperparameter}beta")
                 elif cfg.tuning.parameter_to_tune == 'clipping':
-                    dir_path = os.path.join(save_path+f'_{parameter_varied}sigma_global_step_{cfg.server.constant_global_step}', str(cfg.dataset.similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+                    dir_path = os.path.join(save_path+f'_{parameter_varied}sigma_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
             for fold in range(cfg.tuning.cv_folds):
                 loaded_results[parameter_varied][hyperparameter][fold] = {}
                 file_name = f"fold_{fold}"

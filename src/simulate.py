@@ -86,7 +86,7 @@ def compile_tuning_results(cfg):
     else:
         raise ValueError(f"Unsupported transfer mode: {cfg.results.transfer_mode}")
 
-    loaded_results = load_results(cfg, save_path)
+    loaded_results = load_results(cfg, save_path, similarity)
 
     if cfg.tuning.type=='cross_validation':
         perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, evaluation_metrics, os.path.join(result_path, "cross_validation"))
