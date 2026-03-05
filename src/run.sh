@@ -18,13 +18,14 @@ trap 'echo; echo "Stopping all background jobs..."; kill 0' SIGINT SIGTERM
 # Then fill in the corresponding *_LIST and leave the fixed values below.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SWEEP_PARAM=sigma
+SWEEP_PARAM=client_ratio
 
-SIGMA_LIST=(25.0 60.0 110.0)
+SIGMA_LIST=(20.0)
 ROUNDS_LIST=(50 100 150 200)
-LOCAL_UPDATES_LIST=(10 25 50 100)
+LOCAL_UPDATES_LIST=(12 32)
+# LOCAL_UPDATES_LIST=(2 6 12 22 32)
 SAMPLING_RATE_LIST=(0.05 0.1 0.2 0.4)
-CLIENT_RATIO_LIST=(0.02 0.04 0.06 0.08 0.1 0.13 0.15 0.17 0.21)
+CLIENT_RATIO_LIST=(0.02 0.04 0.06 0.08 0.1 0.21)
 
 # ─── Fixed values (used for all parameters NOT being swept) ───────────────────
 FIXED_SIGMA=20.0
@@ -38,14 +39,20 @@ MAX_GRAD_NORM=2.0
 DP=True
 RESULTS=False
 TUNE=True
-GLOBAL_STEP_SIZE=Adaptive
+GLOBAL_STEP_SIZE=Fixed
+GLOBAL_STEP=1.0
+LOCAL_STEP=0.01
 TUNING_TYPE=cross_validation
-TUNING_PARAMETER=step_size
 
 # ─── Defaults for overridable settings ────────────────────────────────────────
-DEFAULT_GPU=7
-DEFAULT_HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+DEFAULT_GPU=4
 DEFAULT_RESUME=False
+PARAMETER_TO_TUNE="clipping"
+if [ "$PARAMETER_TO_TUNE" == "step_size" ]; then
+    DEFAULT_HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+elif [ "$PARAMETER_TO_TUNE" == "clipping" ]; then
+    DEFAULT_HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
+fi
 
 # ─── Per-value overrides for GPU, HYPERPARAMETER, and RESUME ──────────────────
 # Keys are values of the swept parameter.
@@ -57,8 +64,8 @@ declare -A OVERRIDE_GPU=(
     # ["0.1"]=6
 )
 declare -A OVERRIDE_HYPERPARAMETER=(
-    # ["50.0"]="[0.0025,0.005]"
-    # ["0.02"]="[0.005,0.01,0.02]"
+    # ["12"]="[0.04,0.08,0.16,0.32,0.64,1.28]"
+    # ["32"]="[0.04,0.08,0.16,0.32,0.64,1.28]"
 )
 declare -A OVERRIDE_RESUME=(
     # ["5.0"]=True
@@ -101,7 +108,7 @@ for VAL in "${SWEEP_LIST[@]}"; do
     HYPERPARAMETER="${OVERRIDE_HYPERPARAMETER[$VAL]:-$DEFAULT_HYPERPARAMETER}"
     RESUME="${OVERRIDE_RESUME[$VAL]:-$DEFAULT_RESUME}"
 
-    LOG="logs/${SWEEP_PARAM}_${VAL}"
+    LOG="logs/${SWEEP_PARAM}_${VAL}_${GLOBAL_STEP_SIZE}"
 
     echo "Launching: ${SWEEP_PARAM}=${VAL} | sigma=${SIGMA} rounds=${ROUNDS} local_updates=${LOCAL_UPDATES} sampling_rate=${SAMPLING_RATE} client_ratio=${CLIENT_RATIO} | gpu=${GPU} resume=${RESUME}"
 
@@ -112,12 +119,14 @@ for VAL in "${SWEEP_LIST[@]}"; do
         run_mode.compile_tuning_results=$RESULTS \
         tuning.hyperparameter_grid=$HYPERPARAMETER \
         tuning.type=$TUNING_TYPE \
-        tuning.parameter_to_tune=$TUNING_PARAMETER \
+        tuning.parameter_to_tune=$PARAMETER_TO_TUNE \
         server.dp=$DP \
         server.local_updates=$LOCAL_UPDATES \
         server.sampling_rate=$SAMPLING_RATE \
         server.sigma=$SIGMA \
         server.max_grad_norm=$MAX_GRAD_NORM \
+        server.global_step=$GLOBAL_STEP \
+        server.local_step=$LOCAL_STEP \
         server.client_ratio=$CLIENT_RATIO \
         run_settings.rounds=$ROUNDS \
         > "$LOG" 2>&1 &

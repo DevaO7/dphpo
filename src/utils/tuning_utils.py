@@ -140,7 +140,7 @@ def perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, ev
                 plt.savefig(os.path.join(save_path, f"{cfg.results.transfer_mode}_comparison_{metric.lower().replace(' ', '_')}_hyperparameter_{hyperparameter}_{fold}.png"))
                 plt.close()
 
-def load_results(cfg, save_path):
+def load_results(cfg, save_path, similarity):
     loaded_results = {}
     # Loading the results
     for parameter_varied in cfg.results.transfer_parameters:
@@ -154,9 +154,25 @@ def load_results(cfg, save_path):
                     dir_path = os.path.join(save_path, f"{parameter_varied}ur", f"{hyperparameter}clipping")
             elif cfg.results.transfer_mode == 'sigma':
                 if cfg.tuning.parameter_to_tune == 'step_size':
-                    dir_path = os.path.join(save_path+f"_{parameter_varied}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(cfg.dataset.similarity), f"{cfg.server.client_ratio}",f"{hyperparameter}beta")
+                    dir_path = os.path.join(save_path+f"_{parameter_varied}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(similarity), f"{cfg.server.client_ratio}ur",f"{hyperparameter}beta")
                 elif cfg.tuning.parameter_to_tune == 'clipping':
-                    dir_path = os.path.join(save_path+f'_{parameter_varied}sigma_global_step_{cfg.server.constant_global_step}', str(cfg.dataset.similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+                    dir_path = os.path.join(save_path+f'_{parameter_varied}sigma_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+            elif cfg.results.transfer_mode == 'rounds':
+                if cfg.tuning.parameter_to_tune == 'step_size':
+                    dir_path = os.path.join(save_path, f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
+                elif cfg.tuning.parameter_to_tune == 'clipping':
+                    dir_path = os.path.join(save_path, f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+            elif cfg.results.transfer_mode == 'sampling_rate':
+                if cfg.tuning.parameter_to_tune == 'step_size':
+                    dir_path = os.path.join(save_path+f"_{parameter_varied}sr_{cfg.server.dp}dp_{cfg.server.sigma}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
+                elif cfg.tuning.parameter_to_tune == 'clipping':
+                    raise NotImplementedError("Clipping tuning for sampling rate transfer mode is not implemented yet.")
+            elif cfg.results.transfer_mode == 'local_updates':
+                if cfg.tuning.parameter_to_tune == 'step_size':
+                    dir_path = os.path.join(save_path+f"_{parameter_varied}K_{cfg.server.sampling_rate}sr_{cfg.server.dp}dp_{cfg.server.sigma}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
+                elif cfg.tuning.parameter_to_tune == 'clipping':
+                    dir_path = os.path.join(save_path+f"_{parameter_varied}K_{cfg.server.sampling_rate}sr_{cfg.server.dp}dp_{cfg.server.sigma}sigma", str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+            print(f"Loading results from directory: {dir_path}")
             for fold in range(cfg.tuning.cv_folds):
                 loaded_results[parameter_varied][hyperparameter][fold] = {}
                 file_name = f"fold_{fold}"
@@ -173,6 +189,11 @@ def load_results(cfg, save_path):
                         train_accuracies.append(float(row[3]))  # Train Accuracy is the 4th column
                         train_losses.append(float(row[1]))      # Train Loss is the 2nd column
                         test_losses.append(float(row[2]))       # Test Loss is the 3rd column
+                    if cfg.results.transfer_mode == 'rounds':
+                        test_accuracies = test_accuracies[:int(parameter_varied)]
+                        train_accuracies = train_accuracies[:int(parameter_varied)]
+                        train_losses = train_losses[:int(parameter_varied)]
+                        test_losses = test_losses[:int(parameter_varied)]
                     loaded_results[parameter_varied][hyperparameter][fold]['test_accuracy'] = test_accuracies
                     loaded_results[parameter_varied][hyperparameter][fold]['train_accuracy'] = train_accuracies
                     loaded_results[parameter_varied][hyperparameter][fold]['train_loss'] = train_losses

@@ -268,11 +268,11 @@ def plot_comparison(parameter_varied, T, sigma, K, M, R, l, s):
 if __name__ == "__main__":
     T = 150
     sigma = 20
-    K = 50
+    K = 2
     M = 100
     R = 400
     l = 0.21
-    s = 0.0675
+    s = 0.2
     delta = 1 / (M * R)
     eps_num = compute_epsilon_numerical(T, K, M, R, l, s, sigma)
     print(f"Epsilon (Numerical Accounting): {eps_num:.2f}")

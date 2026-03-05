@@ -71,22 +71,24 @@ def compile_tuning_results(cfg):
     else:
         similarity = cfg.dataset.similarity
     evaluation_metrics = ['test_accuracy', 'test_loss', 'train_accuracy', 'train_loss']
-    if cfg.results.transfer_mode == 'client_ratio':
-        result_path = os.path.join(cfg.results.result_path, str(similarity), cfg.server.constant_global_step, "client_ratio_comparison")
-    elif cfg.results.transfer_mode == 'sigma':
-        result_path = os.path.join(cfg.results.result_path, str(similarity), cfg.server.constant_global_step, "sigma_comparison")
+    result_path = os.path.join(cfg.results.result_path, str(similarity), cfg.server.constant_global_step, cfg.tuning.parameter_to_tune, f"{cfg.results.transfer_mode}_comparison")
 
-    if cfg.results.transfer_mode=='client_ratio':
+    if cfg.results.transfer_mode=='client_ratio' or cfg.results.transfer_mode=='rounds':
         if cfg.tuning.parameter_to_tune == 'step_size':
             save_path = os.path.join(cfg.tuning.save_path+f'_{cfg.server.sigma}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}', str(similarity))
         elif cfg.tuning.parameter_to_tune == 'clipping':
             save_path = os.path.join(cfg.tuning.save_path+f'_{cfg.server.sigma}sigma_global_step_{cfg.server.constant_global_step}', str(similarity), str(cfg.server.local_step))
     elif cfg.results.transfer_mode=='sigma':
         save_path = os.path.join(cfg.tuning.save_path)
+    elif cfg.results.transfer_mode=='sampling_rate':
+        save_path = f"tuning_results/{cfg.run_settings.algorithm}/{cfg.dataset.name}/{cfg.dataset.model_name}_{cfg.run_settings.rounds}T_{cfg.server.local_updates}K"
+    elif cfg.results.transfer_mode=='local_updates':
+        save_path = f"tuning_results/{cfg.run_settings.algorithm}/{cfg.dataset.name}/{cfg.dataset.model_name}_{cfg.run_settings.rounds}T"
     else:
         raise ValueError(f"Unsupported transfer mode: {cfg.results.transfer_mode}")
 
-    loaded_results = load_results(cfg, save_path)
+    loaded_results = load_results(cfg, save_path, similarity)
+
 
     if cfg.tuning.type=='cross_validation':
         perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, evaluation_metrics, os.path.join(result_path, "cross_validation"))
