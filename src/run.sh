@@ -18,18 +18,16 @@ trap 'echo; echo "Stopping all background jobs..."; kill 0' SIGINT SIGTERM
 # Then fill in the corresponding *_LIST and leave the fixed values below.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SWEEP_PARAM=client_ratio
+SWEEP_PARAM=sigma
 
-SIGMA_LIST=(20.0)
-ROUNDS_LIST=(50 100 150 200)
-LOCAL_UPDATES_LIST=(12 32)
-# LOCAL_UPDATES_LIST=(2 6 12 22 32)
-SAMPLING_RATE_LIST=(0.05 0.1 0.2 0.4)
-CLIENT_RATIO_LIST=(0.02 0.04 0.06 0.08 0.1 0.21)
+SIGMA_LIST=(137.0 71.0 49.0 38.0 32.0 20.0)
+LOCAL_UPDATES_LIST=(1 4 8 14 20 50)
+SAMPLING_RATE_LIST=(0.16 0.14 0.1 0.0675 0.035)
+CLIENT_RATIO_LIST=(0.02 0.04 0.06 0.08 0.1)
 
 # ─── Fixed values (used for all parameters NOT being swept) ───────────────────
 FIXED_SIGMA=20.0
-FIXED_ROUNDS=150
+FIXED_ROUNDS=500
 FIXED_LOCAL_UPDATES=50
 FIXED_SAMPLING_RATE=0.2
 FIXED_CLIENT_RATIO=0.21
@@ -39,19 +37,19 @@ MAX_GRAD_NORM=2.0
 DP=True
 RESULTS=False
 TUNE=True
-GLOBAL_STEP_SIZE=Fixed
+GLOBAL_STEP_SIZE=Adaptive
 GLOBAL_STEP=1.0
-LOCAL_STEP=0.01
+LOCAL_STEP=0.64
 TUNING_TYPE=cross_validation
 
 # ─── Defaults for overridable settings ────────────────────────────────────────
-DEFAULT_GPU=4
+DEFAULT_GPU=0
 DEFAULT_RESUME=False
-PARAMETER_TO_TUNE="clipping"
+PARAMETER_TO_TUNE="step_size"
 if [ "$PARAMETER_TO_TUNE" == "step_size" ]; then
-    DEFAULT_HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+    DEFAULT_HYPERPARAMETER="[0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
 elif [ "$PARAMETER_TO_TUNE" == "clipping" ]; then
-    DEFAULT_HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
+    DEFAULT_HYPERPARAMETER="[7.0,7.5]"
 fi
 
 # ─── Per-value overrides for GPU, HYPERPARAMETER, and RESUME ──────────────────
@@ -66,6 +64,7 @@ declare -A OVERRIDE_GPU=(
 declare -A OVERRIDE_HYPERPARAMETER=(
     # ["12"]="[0.04,0.08,0.16,0.32,0.64,1.28]"
     # ["32"]="[0.04,0.08,0.16,0.32,0.64,1.28]"
+    # ["0.1"]="[3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
 )
 declare -A OVERRIDE_RESUME=(
     # ["5.0"]=True

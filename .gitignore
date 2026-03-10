@@ -44,6 +44,8 @@ src/job.sh
 src/run.sh
 src/dump
 src/temp
+src/results
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
