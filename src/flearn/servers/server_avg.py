@@ -28,7 +28,7 @@ def truncate_csv_file(csv_path: str, keep_round: int) -> None:
     os.replace(tmp_path, csv_path)
 
 class FedAvg(Server):
-    def __init__(self, model, train_data_loader, test_data_loader, num_glob_iters, save_path, loss_fn_name, local_learning_rate, global_learning_rate, weight_decay, use_cuda, similarity, file_name, client_ratio, dp, local_updates, sample_rate, noise_multiplier, max_grad_norm, x_label, y_label, resume=False):
+    def __init__(self, model, train_data_loader, test_data_loader, num_glob_iters, save_path, loss_fn_name, local_learning_rate, global_learning_rate, weight_decay, use_cuda, similarity, file_name, client_ratio, dp, local_updates, sample_rate, noise_multiplier, max_grad_norm, x_label, y_label):
         super().__init__(model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters)
         self.train_data_loader = train_data_loader
         self.test_data_loader = test_data_loader
