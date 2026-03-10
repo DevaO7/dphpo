@@ -41,14 +41,27 @@ if [ "$PARAMETER_TO_TUNE" == "step_size" ]; then
     # HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
     # HYPERPARAMETER="[0.08,0.16,0.32,0.64,1.28]"
     HYPERPARAMETER="[0.005,0.01,0.02,0.04,0.08,0.16]"
+    # HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+    # HYPERPARAMETER="[0.08,0.16,0.32,0.64,1.28]"
+    HYPERPARAMETER="[0.005,0.01,0.02,0.04,0.08,0.16]"
 elif [ "$PARAMETER_TO_TUNE" == "clipping" ]; then
+    # HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
+    HYPERPARAMETER="[1.0,1.5,2.0,2.5,3.0,3.5]"
     HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
+    # HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5]"
+    
 fi
 TRANSFER_MODE=client_ratio
 if [ "$TRANSFER_MODE" == "local_updates" ]; then
     TRANSFER_PARAMETERS="[2,6,12,22,32,50]"
 elif [ "$TRANSFER_MODE" == "client_ratio" ]; then
     TRANSFER_PARAMETERS="[0.02,0.04,0.06,0.08,0.1,0.21]"
+elif [ "$TRANSFER_MODE" == "sampling_rate" ]; then
+    TRANSFER_PARAMETERS="[0.035,0.0675,0.1,0.14,0.16,0.2]"
+elif [ "$TRANSFER_MODE" == "sigma" ]; then
+    TRANSFER_PARAMETERS="[110.0,60.0,40.0,30.0,25.0,20.0]"
+elif [ "$TRANSFER_MODE" == "rounds" ]; then
+    TRANSFER_PARAMETERS="[5,17,38,65,95,150]"
 elif [ "$TRANSFER_MODE" == "sampling_rate" ]; then
     TRANSFER_PARAMETERS="[0.035,0.0675,0.1,0.14,0.16,0.2]"
 elif [ "$TRANSFER_MODE" == "sigma" ]; then
