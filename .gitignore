@@ -47,6 +47,8 @@ src/temp
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+src/results
+src/job_run.sh
 
 # Unit test / coverage reports
 htmlcov/
@@ -217,3 +219,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+src/transferability.sh

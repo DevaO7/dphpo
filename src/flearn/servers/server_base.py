@@ -11,15 +11,12 @@ class Server:
         self.users = []
         self.selected_users = []
         self.use_cuda = use_cuda
-        if resume:
-            checkpoint_path = os.path.join('checkpoints', save_path, f"checkpoint.pth")
-            if os.path.exists(checkpoint_path):
-                self.checkpoint = torch.load(checkpoint_path, map_location='cpu')
-                self.model = copy.deepcopy(model)
-                self.model.load_state_dict(self.checkpoint['model_state_dict'])
-                self.start_iter = self.checkpoint['round'] + 1
-            else:
-                raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
+        checkpoint_path = os.path.join('checkpoints', save_path, f"checkpoint.pth")
+        if os.path.exists(checkpoint_path):
+            self.checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            self.model = copy.deepcopy(model)
+            self.model.load_state_dict(self.checkpoint['model_state_dict'])
+            self.start_iter = self.checkpoint['round'] + 1
         else:
             self.model = copy.deepcopy(model)
             self.start_iter = 0

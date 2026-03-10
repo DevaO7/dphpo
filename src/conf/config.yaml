@@ -1,5 +1,5 @@
 defaults:
-  - dataset: synthetic
+  - dataset: femnist
   - _self_
 
 hydra:

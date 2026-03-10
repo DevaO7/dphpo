@@ -162,16 +162,18 @@ def load_results(cfg, save_path, similarity):
                     dir_path = os.path.join(save_path, f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
                 elif cfg.tuning.parameter_to_tune == 'clipping':
                     dir_path = os.path.join(save_path, f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+
             elif cfg.results.transfer_mode == 'sampling_rate':
                 if cfg.tuning.parameter_to_tune == 'step_size':
                     dir_path = os.path.join(save_path+f"_{parameter_varied}sr_{cfg.server.dp}dp_{cfg.server.sigma}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
                 elif cfg.tuning.parameter_to_tune == 'clipping':
-                    raise NotImplementedError("Clipping tuning for sampling rate transfer mode is not implemented yet.")
+                    dir_path = os.path.join(save_path+f"_{parameter_varied}sr_{cfg.server.dp}dp_{cfg.server.sigma}sigma_global_step_{cfg.server.constant_global_step}", str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+            
             elif cfg.results.transfer_mode == 'local_updates':
                 if cfg.tuning.parameter_to_tune == 'step_size':
                     dir_path = os.path.join(save_path+f"_{parameter_varied}K_{cfg.server.sampling_rate}sr_{cfg.server.dp}dp_{cfg.server.sigma}sigma_{cfg.server.max_grad_norm}clip_constant_global_step_{cfg.server.constant_global_step}", str(similarity), f"{cfg.server.client_ratio}ur", f"{hyperparameter}beta")
                 elif cfg.tuning.parameter_to_tune == 'clipping':
-                    dir_path = os.path.join(save_path+f"_{parameter_varied}K_{cfg.server.sampling_rate}sr_{cfg.server.dp}dp_{cfg.server.sigma}sigma", str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
+                    dir_path = os.path.join(save_path+f"_{parameter_varied}K_{cfg.server.sampling_rate}sr_{cfg.server.dp}dp_{cfg.server.sigma}sigma_global_step_{cfg.server.constant_global_step}", str(similarity), str(cfg.server.local_step), f"{cfg.server.client_ratio}ur", f"{hyperparameter}clipping")
             print(f"Loading results from directory: {dir_path}")
             for fold in range(cfg.tuning.cv_folds):
                 loaded_results[parameter_varied][hyperparameter][fold] = {}
