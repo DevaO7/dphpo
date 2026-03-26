@@ -266,16 +266,18 @@ def plot_comparison(parameter_varied, T, sigma, K, M, R, l, s):
     plt.savefig(f'comparison_epsilon_{parameter_varied}_2.png')
     
 if __name__ == "__main__":
-    T = 150
+    T = 500
     sigma = 20
-    K = 2
-    M = 100
-    R = 400
+    K = 50
+    M = 40
+    R = 2000
     l = 0.21
     s = 0.2
     delta = 1 / (M * R)
-    eps_num = compute_epsilon_numerical(T, K, M, R, l, s, sigma)
-    print(f"Epsilon (Numerical Accounting): {eps_num:.2f}")
+    for value in np.arange(20, 30, 1):
+        eps_num = compute_epsilon_numerical(T, int(value), M, R, l, s, sigma)
+        print(f"Value: {value}")
+        print(f"Epsilon (Numerical Accounting): {eps_num:.2f}")
 
 
     # T_values = np.arange(2, 1000, 25)

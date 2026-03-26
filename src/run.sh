@@ -18,18 +18,16 @@ trap 'echo; echo "Stopping all background jobs..."; kill 0' SIGINT SIGTERM
 # Then fill in the corresponding *_LIST and leave the fixed values below.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SWEEP_PARAM=client_ratio
+SWEEP_PARAM=sampling_rate
 
 SIGMA_LIST=(20.0)
-ROUNDS_LIST=(50 100 150 200)
-LOCAL_UPDATES_LIST=(12 32)
-# LOCAL_UPDATES_LIST=(2 6 12 22 32)
-SAMPLING_RATE_LIST=(0.05 0.1 0.2 0.4)
-CLIENT_RATIO_LIST=(0.02 0.04 0.06 0.08 0.1 0.21)
+LOCAL_UPDATES_LIST=(8)
+SAMPLING_RATE_LIST=(0.15)
+CLIENT_RATIO_LIST=(0.02)
 
 # ─── Fixed values (used for all parameters NOT being swept) ───────────────────
 FIXED_SIGMA=20.0
-FIXED_ROUNDS=150
+FIXED_ROUNDS=500
 FIXED_LOCAL_UPDATES=50
 FIXED_SAMPLING_RATE=0.2
 FIXED_CLIENT_RATIO=0.21
@@ -39,19 +37,22 @@ MAX_GRAD_NORM=2.0
 DP=True
 RESULTS=False
 TUNE=True
-GLOBAL_STEP_SIZE=Fixed
+GLOBAL_STEP_SIZE=Adaptive
 GLOBAL_STEP=1.0
-LOCAL_STEP=0.01
+LOCAL_STEP=0.64
 TUNING_TYPE=cross_validation
 
 # ─── Defaults for overridable settings ────────────────────────────────────────
-DEFAULT_GPU=4
+DEFAULT_GPU=5
 DEFAULT_RESUME=False
-PARAMETER_TO_TUNE="clipping"
+PARAMETER_TO_TUNE="step_size"
+GPU_LIST=(5) # GPUs to cycle through for parallel jobs
+
 if [ "$PARAMETER_TO_TUNE" == "step_size" ]; then
-    DEFAULT_HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
+    # DEFAULT_HYPERPARAMETER="[0.08,0.16,0.32,0.64,1.28,2.56,5.12,10.24]"
+    DEFAULT_HYPERPARAMETER="[0.16]"
 elif [ "$PARAMETER_TO_TUNE" == "clipping" ]; then
-    DEFAULT_HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
+    DEFAULT_HYPERPARAMETER="[7.0,7.5]"
 fi
 
 # ─── Per-value overrides for GPU, HYPERPARAMETER, and RESUME ──────────────────
@@ -66,6 +67,7 @@ declare -A OVERRIDE_GPU=(
 declare -A OVERRIDE_HYPERPARAMETER=(
     # ["12"]="[0.04,0.08,0.16,0.32,0.64,1.28]"
     # ["32"]="[0.04,0.08,0.16,0.32,0.64,1.28]"
+    # ["0.1"]="[3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
 )
 declare -A OVERRIDE_RESUME=(
     # ["5.0"]=True
@@ -86,6 +88,9 @@ case "$SWEEP_PARAM" in
     *) echo "Unknown SWEEP_PARAM: $SWEEP_PARAM"; exit 1 ;;
 esac
 
+GPU_COUNT=${#GPU_LIST[@]}
+JOB_INDEX=0
+
 for VAL in "${SWEEP_LIST[@]}"; do
 
     # Apply fixed values, then override the swept parameter
@@ -104,33 +109,42 @@ for VAL in "${SWEEP_LIST[@]}"; do
     esac
 
     # Resolve per-value overrides
-    GPU="${OVERRIDE_GPU[$VAL]:-$DEFAULT_GPU}"
-    HYPERPARAMETER="${OVERRIDE_HYPERPARAMETER[$VAL]:-$DEFAULT_HYPERPARAMETER}"
     RESUME="${OVERRIDE_RESUME[$VAL]:-$DEFAULT_RESUME}"
+    BASE_HYPERPARAMETER_GRID="${OVERRIDE_HYPERPARAMETER[$VAL]:-$DEFAULT_HYPERPARAMETER}"
 
-    LOG="logs/${SWEEP_PARAM}_${VAL}_${GLOBAL_STEP_SIZE}"
+    # Clean up the grid string and prepare for iteration
+    CLEAN_GRID=$(echo "$BASE_HYPERPARAMETER_GRID" | tr -d '[] ')
+    
+    IFS=',' read -r -a HYPERPARAMETER_VALUES <<< "$CLEAN_GRID"
 
-    echo "Launching: ${SWEEP_PARAM}=${VAL} | sigma=${SIGMA} rounds=${ROUNDS} local_updates=${LOCAL_UPDATES} sampling_rate=${SAMPLING_RATE} client_ratio=${CLIENT_RATIO} | gpu=${GPU} resume=${RESUME}"
+    for HP_VAL in "${HYPERPARAMETER_VALUES[@]}"; do
+        # Cycle through available GPUs
+        GPU_INDEX=$((JOB_INDEX % GPU_COUNT))
+        GPU=${GPU_LIST[$GPU_INDEX]}
+        JOB_INDEX=$((JOB_INDEX + 1))
 
-    CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py \
-        server.constant_global_step=$GLOBAL_STEP_SIZE \
-        run_settings.resume_from_checkpoint=$RESUME \
-        run_mode.tune_hyperparameter=$TUNE \
-        run_mode.compile_tuning_results=$RESULTS \
-        tuning.hyperparameter_grid=$HYPERPARAMETER \
-        tuning.type=$TUNING_TYPE \
-        tuning.parameter_to_tune=$PARAMETER_TO_TUNE \
-        server.dp=$DP \
-        server.local_updates=$LOCAL_UPDATES \
-        server.sampling_rate=$SAMPLING_RATE \
-        server.sigma=$SIGMA \
-        server.max_grad_norm=$MAX_GRAD_NORM \
-        server.global_step=$GLOBAL_STEP \
-        server.local_step=$LOCAL_STEP \
-        server.client_ratio=$CLIENT_RATIO \
-        run_settings.rounds=$ROUNDS \
-        > "$LOG" 2>&1 &
+        LOG="logs/${SWEEP_PARAM}_${VAL}_${PARAMETER_TO_TUNE}_${HP_VAL}"
 
+        echo "Launching: ${SWEEP_PARAM}=${VAL}, ${PARAMETER_TO_TUNE}=${HP_VAL} | sigma=${SIGMA} rounds=${ROUNDS} local_updates=${LOCAL_UPDATES} sampling_rate=${SAMPLING_RATE} client_ratio=${CLIENT_RATIO} | gpu=${GPU} resume=${RESUME}"
+
+        CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py \
+            server.constant_global_step=$GLOBAL_STEP_SIZE \
+            run_mode.tune_hyperparameter=$TUNE \
+            run_mode.compile_tuning_results=$RESULTS \
+            tuning.hyperparameter_grid="[$HP_VAL]" \
+            tuning.type=$TUNING_TYPE \
+            tuning.parameter_to_tune=$PARAMETER_TO_TUNE \
+            server.dp=$DP \
+            server.local_updates=$LOCAL_UPDATES \
+            server.sampling_rate=$SAMPLING_RATE \
+            server.sigma=$SIGMA \
+            server.max_grad_norm=$MAX_GRAD_NORM \
+            server.global_step=$GLOBAL_STEP \
+            server.local_step=$LOCAL_STEP \
+            server.client_ratio=$CLIENT_RATIO \
+            run_settings.rounds=$ROUNDS \
+            > "$LOG" 2>&1 &
+    done
 done
 
 wait

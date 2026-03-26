@@ -2,10 +2,10 @@ name: flwrlabs/femnist
 model_name: CNN_FEMNIST
 nb_users: 40
 batch_size: 200
-partitioner_name: IidPartitioner
-partitioner_parameter: 
+partitioner_name: DirichletPartitioner
+partitioner_parameter: 0.1
 dim_output: 62
-similarity: iid
+similarity: 0.1
 x_label: image
 y_label: character
 loss_fn: CrossEntropyLoss
