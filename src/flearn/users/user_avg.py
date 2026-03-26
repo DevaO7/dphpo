@@ -3,6 +3,7 @@ from flearn.optimizers.fedoptimizer import *
 import random
 import torch
 from torch.utils.data import RandomSampler, DataLoader
+from torch.utils.data import SubsetRandomSampler
 from opacus import PrivacyEngine
 from opacus.data_loader import DPDataLoader, switch_generator
 import copy
@@ -44,23 +45,20 @@ class UserAVG(User):
         self.model.cpu()
         for local, server, delta in zip(self.model.parameters(), self.server_model, self.delta_model):
             delta.data = local.data.detach() - server.data.detach()
-        
     
     def train_dp(self, global_iter):
         if self.use_cuda:
             self.model = self.model.cuda()
         self.model.train()
-        g = torch.Generator().manual_seed(self.id + global_iter * 100)
-        self.dp_train_loader = switch_generator(data_loader=self.dp_train_loader, generator=g)
-
-        it = iter(self.dp_train_loader)
         for step in range(1, self.local_updates + 1):
-            try:
-                batch = next(it)
-            except StopIteration:
-                it = iter(self.dp_train_loader)
-                batch = next(it)
-            X, y = batch[self.x_label], batch[self.y_label] 
+            np.random.seed(500 * (global_iter + 1) + step + 1)
+            torch.manual_seed(500 * (global_iter + 1) + step + 1)
+            train_idx = np.arange(self.train_samples)
+            train_sampler = SubsetRandomSampler(train_idx)
+            self.trainloader = DataLoader(self.traindataset, self.batch_size, sampler=train_sampler)
+            batch = list(self.trainloader)[0] 
+            X, y = batch[self.x_label], batch[self.y_label]
+            print(len(X))
             if y.numel() == 0:
                 continue
             if self.use_cuda:

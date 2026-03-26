@@ -9,6 +9,7 @@ similarity: 0.1
 x_label: image
 y_label: character
 loss_fn: CrossEntropyLoss
+ratio_training: 0.8
 max_samples_per_client: 2500
 alpha:
 beta:

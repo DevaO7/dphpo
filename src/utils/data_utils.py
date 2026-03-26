@@ -70,7 +70,7 @@ class FlowerFederatedLoaders:
         )
         test_loader = DataLoader(
             test_ds,
-            batch_size=self.batch_size,
+            batch_size=500,
             shuffle=False,
             num_workers=self.num_workers,
             drop_last=False,
@@ -233,7 +233,7 @@ def visualize_partition(cfg, train_data_loader, test_data_loader, save_path):
         save_path=save_path
     )
 
-def get_loader_flwr(cfg):
+def get_loader_flwr(cfg, batch_size=None):
     """
     Loads the raw global datasets.
     """
@@ -242,9 +242,9 @@ def get_loader_flwr(cfg):
     num_clients=cfg.dataset.nb_users,
     partitioner_name=cfg.dataset.partitioner_name,
     alpha=cfg.dataset.partitioner_parameter,
-    batch_size=cfg.dataset.batch_size,
+    batch_size=batch_size,
     num_workers=0,
-    client_test_fraction=0.2,
+    client_test_fraction=1-cfg.dataset.ratio_training,
     seed=cfg.run_settings.seed,
     image_key=cfg.dataset.x_label,
     label_key=cfg.dataset.y_label,
@@ -277,7 +277,7 @@ def get_global_loader(cfg, data):
     global_loader = DataLoader(global_dataset, batch_size=cfg.run_settings.batch_size, shuffle=True)
     return global_loader
 
-def get_loader_from_raw_data(cfg, per_client_loader=True):
+def get_loader_from_raw_data(cfg, per_client_loader=True, batch_size=None):
     X_split, y_split = generate_synthetic_dataset(alpha=cfg.dataset.alpha, 
                                    beta=cfg.dataset.beta,
                                    iid=cfg.dataset.iid,
@@ -290,7 +290,7 @@ def get_loader_from_raw_data(cfg, per_client_loader=True):
                             )
     client_test_loaders = []
     client_train_loaders = []
-    train_size = int(cfg.dataset.num_samples * 0.8)
+    train_size = int(cfg.dataset.num_samples * cfg.dataset.ratio_training)
     for user_id in range(cfg.dataset.nb_users):
         user_data = (torch.as_tensor(X_split[user_id]), torch.as_tensor(y_split[user_id], dtype=torch.long))
         dataset = SyntheticDataset(dataset=user_data)
@@ -307,7 +307,7 @@ def get_data_loaders(cfg, train=True, per_client_loader=True):
     Splits training data among clients, returns Global Test Set for server.
     """
     if cfg.dataset.name in ["mnist", "cifar10", "flwrlabs/femnist", "ylecun/mnist"]:
-        train_data_loader, test_data_loader = get_loader_flwr(cfg)
+        train_data_loader, test_data_loader = get_loader_flwr(cfg, batch_size=int(cfg.dataset.max_samples_per_client*cfg.server.sampling_rate*cfg.dataset.ratio_training))
     elif cfg.dataset.name == "synthetic":
         train_data_loader, test_data_loader = get_loader_from_raw_data(cfg, per_client_loader)
     else:
