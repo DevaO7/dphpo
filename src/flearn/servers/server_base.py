@@ -63,7 +63,7 @@ class Server:
         selected_mask = random_vals < probabilities
         return np.array(data)[selected_mask]
 
-    def select_users(self, glob_iter):
+    def select_users_poisson_sampling(self, glob_iter):
         assert 0.0 < self.client_ratio <= 1.0
         ids = [c.id for c in self.users]
         probs = np.ones(len(self.users))*self.client_ratio
@@ -73,6 +73,15 @@ class Server:
         self.selected_users = [c for c in self.users if c.id in selected_set]
         return self.selected_users
 
+    def select_users(self, glob_iter):
+        assert 0.0 < self.client_ratio <= 1.0
+        ids = [c.id for c in self.users]
+        np.random.seed(glob_iter)
+        selected_set = np.random.choice(ids, size=max(1, int(self.client_ratio * len(self.users))), replace=False)
+        print(f"Selected users: {selected_set}")
+        self.selected_users = [c for c in self.users if c.id in selected_set]
+        return self.selected_users
+    
     def test_error_and_loss(self):
         """Excess error of the current model of all users (test data)"""
         num_samples = []

@@ -3,6 +3,7 @@ from flearn.optimizers.fedoptimizer import *
 import random
 import torch
 from torch.utils.data import RandomSampler, DataLoader
+from torch.utils.data._utils.collate import default_collate
 from torch.utils.data import SubsetRandomSampler
 from opacus import PrivacyEngine
 from opacus.data_loader import DPDataLoader, switch_generator
@@ -55,10 +56,9 @@ class UserAVG(User):
             torch.manual_seed(500 * (global_iter + 1) + step + 1)
             train_idx = np.arange(self.train_samples)
             train_sampler = SubsetRandomSampler(train_idx)
-            self.trainloader = DataLoader(self.traindataset, self.batch_size, sampler=train_sampler)
-            batch = list(self.trainloader)[0] 
+            it = iter(DataLoader(self.traindataset, self.batch_size, sampler=train_sampler))
+            batch = next(it)
             X, y = batch[self.x_label], batch[self.y_label]
-            print(len(X))
             if y.numel() == 0:
                 continue
             if self.use_cuda:
