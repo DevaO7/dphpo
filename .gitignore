@@ -46,12 +46,8 @@ src/dump
 src/temp
 src/temp_
 src/results
-src/results_poisson_sampling
-src/checkpoints_poisson_sampling
-src/tuning_results_poisson_sampling
-src/results_Fixed
-src/tuning_results_Fixed
 src/checkpoints_Fixed
+src/results_Fixed
 
 # Installer logs
 pip-log.txt
