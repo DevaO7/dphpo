@@ -196,8 +196,8 @@ def compute_epsilon_numerical(T, K, M, R, l, s, sigma_gaussian):
     # alpha_int_max: int
     # n_points: int
     delta = 1 / (M * R)
-    sigma_gaussian_actual = sigma_gaussian 
-    # sigma_gaussian_actual = sigma_gaussian * np.sqrt(l * M)
+    # sigma_gaussian_actual = sigma_gaussian 
+    sigma_gaussian_actual = sigma_gaussian * np.sqrt(l * M)
 
     # 1. Determine the integer alpha with the best DP bound (grid search between 2 and alpha_int_max)
     alpha_int_max = 100
@@ -225,161 +225,68 @@ def compute_epsilon_numerical(T, K, M, R, l, s, sigma_gaussian):
     return epsilon_dp_bound_for_float_alpha(alpha_float_min, T, K, l, s, delta, sigma_gaussian_actual, numerical=True)
 
 
-def plot_comparison(parameter_varied, T, sigma, K, M, R, l, s):
-    eps_num = []
-    eps_theo = []
-    if parameter_varied == 'sigma':
-        parameter = np.arange(1, 1000, 10)
-        for sigma in parameter:
-            print(f"Computing for sigma={sigma}")
-            # eps_num.append(compute_epsilon_numerical(T, K, M, R, l, s, sigma))
-            eps_theo.append(compute_epsilon_theory(T, K, M, R, l, s, sigma))
-    elif parameter_varied == 'T':
-        parameter = np.arange(1, 1000, 25)
-        for T in parameter:
-            print(f"Computing for T={T}")
-            # eps_num.append(compute_epsilon_numerical(T, K, M, R, l, s, sigma))
-            eps_theo.append(compute_epsilon_theory(T, K, M, R, l, s, sigma))
-    elif parameter_varied == 'K':
-        parameter = np.arange(1, 100, 1)
-        for K in parameter:
-            print(f"Computing for K={K}")
-            # eps_num.append(compute_epsilon_numerical(T, int(K), M, R, l, s, sigma))
-            eps_theo.append(compute_epsilon_theory(T, K, M, R, l, s, sigma))
-    elif parameter_varied == 'l':
-        parameter = np.arange(0.01, 1, 0.01)
-        for l in parameter:
-            print(f"Computing for l={l}")
-            # eps_num.append(compute_epsilon_numerical(T, K, M, R, l, s, sigma))
-            eps_theo.append(compute_epsilon_theory(T, K, M, R, l, s, sigma))
-    elif parameter_varied == 's':
-        parameter = np.arange(0.01, 1, 0.01)
-        for s in parameter:
-            print(f"Computing for s={s}")
-            # eps_num.append(compute_epsilon_numerical(T, K, M, R, l, s, sigma))
-            eps_theo.append(compute_epsilon_theory(T, K, M, R, l, s, sigma))
+def hp_epsilon_rdp_bound(T, K, M, R, l, s, sigma_gaussian_actual, lambda_, 
+                                         lambda_hat, eta, gamma, expected_K, epsilon_hat, epsilon_fn, numerical):
+    epsilon_val = epsilon_fn(
+        lambda_, T, K, M, R, l, s, sigma_gaussian_actual, numerical
+    )
 
-    # plt.plot(parameter, eps_num, label='Numerical Accounting')
-    plt.plot(parameter, eps_theo, label='Theoretical Accounting')
-    plt.ylabel('Epsilon')
-    plt.xlabel(f'{parameter_varied}')
-    plt.title(f'Epsilon vs {parameter_varied}')
-    plt.legend()
-    plt.savefig(f'comparison_epsilon_{parameter_varied}_2.png')
-    
+    epsilon_hat_value = epsilon_hat(lambda_hat, T, K, M, R, l, s, sigma_gaussian_actual, numerical)
+
+    epsilon_prime = (
+        epsilon_val
+        + (1 + eta) * (1 - 1 / lambda_hat) * epsilon_hat_value
+        + ((1 + eta) * math.log(1 / gamma)) / lambda_hat
+        + math.log(expected_K) / (lambda_ - 1)
+    )
+
+    return epsilon_prime
+
+def hp_epsilon_dp_bound_for_int_alpha(T, K, M, R, l, s, sigma_gaussian_actual, delta, lambda_int, lambda_hat_int, eta, gamma, expected_K, numerical, epsilon_hat=epsilon_rdp_bound_for_int_alpha, epsilon_fn=epsilon_rdp_bound_for_int_alpha):
+    return hp_epsilon_rdp_bound(T, K, M, R, l, s, sigma_gaussian_actual, lambda_int, 
+                                         lambda_hat_int, eta, gamma, expected_K, epsilon_hat, epsilon_fn, numerical) + np.log(1 / delta) / (lambda_int - 1)
+
+def hp_epsilon_dp_bound_for_float_alpha(T, K, M, R, l, s, sigma_gaussian_actual, delta, lambda_float, lambda_hat_int, eta, gamma, expected_K, numerical, epsilon_hat=epsilon_rdp_bound_for_int_alpha, epsilon_fn=epsilon_rdp_bound_for_float_alpha):
+    return hp_epsilon_rdp_bound(T, K, M, R, l, s, sigma_gaussian_actual, lambda_float,
+                                         lambda_hat_int, eta, gamma, expected_K, epsilon_hat, epsilon_fn, numerical) + np.log(1 / delta) / (lambda_float - 1)
+
+def compute_hp_epsilon(T, K, M, R, l, s, sigma_gaussian, eta, gamma, expected_K, numerical):
+    delta = 1 / (M * R)
+    sigma_gaussian_actual = sigma_gaussian * np.sqrt(l * M)
+    lambda_int_max = 100
+    lambda_int_space = np.arange(2, lambda_int_max + 1)
+    lambda_hat_int_space = np.arange(1, lambda_int_max + 1)
+    eps_lambda = np.full((len(lambda_int_space), len(lambda_hat_int_space)), np.inf)
+    for lambda_int in lambda_int_space:
+        for lambda_hat_int in lambda_hat_int_space:
+            hp_epsilon = hp_epsilon_dp_bound_for_int_alpha(T, K, M, R, l, s, sigma_gaussian_actual, delta, lambda_int, lambda_hat_int, eta, gamma, expected_K, numerical)
+            eps_lambda[lambda_int - 2, lambda_hat_int - 1] = hp_epsilon
+    lambda_int_min, lambda_hat_int_min = np.unravel_index(np.argmin(eps_lambda), eps_lambda.shape)
+    lambda_int_min += 2  
+    lambda_hat_int_min += 1
+
+    lambda_lower = (lambda_int_min) - 1. + 0.0001  # instability around alpha=1
+    lambda_upper = lambda_int_min + 1.
+
+    n_points = 1000  # precision of the grid
+    lambda_float_space = np.linspace(lambda_lower, lambda_upper, n_points)
+    idx_min = np.argmin([
+        hp_epsilon_dp_bound_for_float_alpha(T, K, M, R, l, s, sigma_gaussian_actual, delta, lambda_float, lambda_hat_int_min, eta, gamma, expected_K, numerical)
+        for lambda_float in lambda_float_space
+    ])
+    lambda_float_min = lambda_float_space[idx_min]
+    return hp_epsilon_dp_bound_for_float_alpha(T, K, M, R, l, s, sigma_gaussian_actual, delta, lambda_float_min, lambda_hat_int_min, eta, gamma, expected_K, numerical)
+
 if __name__ == "__main__":
-    T = 300
+    T = 500
     sigma = 20
     K = 50
     M = 40
     R = 2000
     l = 0.2
     s = 0.2
-    delta = 1 / (M * R)
-    # eps_num = compute_epsilon_theory(T, K, M, R, l, s, sigma)
-    # print(f"Epsilon (Theoretical Accounting): {eps_num:.2f}")
-    # for value in [0.025,0.05,0.075,0.1,0.125,0.2]:
-    for value in [143,86,62,48,41,20]:
-        eps_num = compute_epsilon_theory(T, K, M, R, l, s, value)
-        print(f"Value: {value}")
-        print(f"Epsilon (Numerical Accounting): {eps_num:.2f}")
-
-
-    # T_values = np.arange(2, 1000, 25)
-    # l_values = np.arange(0.01, 1, 0.01)
-    # eps_values_num = []
-    # with open('epsilon_values_numerical_T_l.csv', 'w') as f:
-    #     writer = csv.writer(f)
-    #     writer.writerow(['T', 'l', 'Epsilon Numerical'])
-
-    # for T in T_values:
-    #     for l in l_values:
-    #         eps_num = round(compute_epsilon_numerical(T=int(T), K=int(K), M=100, R=int(0.8*5000), l=l, s=0.2, sigma_gaussian=int(sigma)), 2)
-    #         with open('epsilon_values_numerical_T_l.csv', 'a') as f:
-    #             writer = csv.writer(f)
-    #             writer.writerow([int(T), l, eps_num])
-    #         eps_values_num.append(eps_num)
+    eta = 0.1
+    gamma = 0.1
+    expected_K = 50
+    compute_hp_epsilon(T, K, M, R, l, s, sigma, eta, gamma, expected_K, numerical=False)
     
-    # # 3d plot
-    # from mpl_toolkits.mplot3d import Axes3D
-    # fig = plt.figure()
-    # ax = fig.add_subplot(111, projection='3d')
-    # T_grid, l_grid = np.meshgrid(T_values, l_values)
-    # eps_grid = np.array(eps_values_num).reshape(len(l_values), len(T_values))
-    # ax.plot_surface(T_grid, l_grid, eps_grid, cmap='viridis')
-    # ax.set_xlabel('T')
-    # ax.set_ylabel('l')
-    # ax.set_zlabel('Epsilon')
-    # plt.title('Epsilon DP Bound vs T and l (Numerical Accounting)')
-    # plt.savefig('epsilon_dp_bound_vs_T_l_numerical.png')
-
-
-    # plot_comparison('T', T, sigma, K, M, R, l, s)
-
-
-
-
-
-
-
-
-
-
-# # ... (previous code)
-
-
-# table = []
-
-# x = []
-# y = []
-
-# # for sigma in np.arange(1, 1000, 10):
-# # for T in np.arange(1, 1000, 5):
-
-# for sigma in np.logspace(1, 10, 100):
-#     eps_theory = round(compute_epsilon_theory(T=int(250), K=5, M=100, R=int(0.8*5000), l=0.2, s=0.2, sigma_gaussian=int(sigma)), 4)
-#     eps_numerical = round(compute_epsilon_numerical(T=int(250), K=5, M=100, R=int(0.8*5000), l=0.2, s=0.2, sigma_gaussian=int(sigma)), 4)
-#     temp = {
-#         "T": int(250),
-#         "K": 5,
-#         "M": 100,
-#         "R": int(0.8 * 2500),
-#         "l": 0.2,
-#         "s": 0.2,
-#         "sigma_gaussian": int(sigma),
-#         "epsilon": float(eps)
-#     }
-#     table.append(temp) 
-#     x.append(int(sigma))
-#     y.append(eps)
-#     print(f"sigma: {int(sigma)}, Epsilon: {eps}")
-
-# # 1. Define the directory path you want to save results in
-# results_dir = 'Differential-Privacy-for-Heterogeneous-Federated-Learning/results/'
-
-# # 2. Create the directory if it doesn't exist
-# os.makedirs(results_dir, exist_ok=True)
-
-# # 3. Now, save your files into that directory
-# json_path = os.path.join(results_dir, 'eps_T_alpha.json')
-# with open(json_path, 'w') as f:
-#     json.dump(table, f, indent=4)
-
-# image_path = os.path.join(results_dir, 'epsilon_dp_bound_vs_T_new_setting_large_T.png')
-# plt.plot(x, y)
-# plt.xscale('log')
-# plt.yscale('log')
-# plt.xlabel('sigma')
-# plt.ylabel('Epsilon (DP Bound)')
-# plt.title('Epsilon DP Bound vs T')
-# plt.grid()
-# plt.savefig(image_path)
-
-# print(f"\nResults saved successfully in '{results_dir}'")
-
-
-# # for T in range(1, 1001):
-# # for l in np.arange(0, 1, 0.01):
-# # for K in range(1, 100):
-# # for s in np.arange(0, 1, 0.01):
-# # for sigma in np.arange(1, 1000, 10):

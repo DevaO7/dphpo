@@ -1,7 +1,7 @@
 name: ylecun/mnist
 model_name: cnn_mnist
 nb_users: 40
-batch_size: 1000
+batch_size: 500
 partitioner_name: IidPartitioner
 partitioner_parameter: 
 dim_output: 10
@@ -10,3 +10,4 @@ x_label: image
 y_label: label
 loss_fn: CrossEntropyLoss
 max_samples_per_client: 2500
+ratio_training: 0.8

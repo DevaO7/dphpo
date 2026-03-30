@@ -63,13 +63,7 @@ def find_optimum(cfg, train_loader, test_loader, epochs=1000, log_interval=50, l
 
 
 def compile_tuning_results(cfg):
-    if cfg.dataset.name == 'synthetic':
-        if cfg.dataset.iid:
-            similarity = 'iid'
-        else:
-            similarity = (cfg.dataset.alpha, cfg.dataset.beta)
-    else:
-        similarity = cfg.dataset.similarity
+    similarity = cfg.dataset.similarity
     evaluation_metrics = ['test_accuracy', 'test_loss', 'train_accuracy', 'train_loss']
     result_path = os.path.join(cfg.results.result_path, str(similarity), cfg.server.constant_global_step, cfg.tuning.parameter_to_tune, f"{cfg.results.transfer_mode}_comparison")
 
@@ -104,13 +98,7 @@ def tune_hyperparameters(cfg):
     else:
         model = getattr(models, cfg.dataset.model_name)()
 
-    if cfg.dataset.name == 'synthetic':
-        if cfg.dataset.iid:
-            similarity = 'iid'
-        else:
-            similarity = (cfg.dataset.alpha, cfg.dataset.beta)
-    else:
-        similarity = cfg.dataset.similarity
+    similarity = cfg.dataset.similarity
     if cfg.tuning.type=='cross_validation':
         for hyperparameter in cfg.tuning.hyperparameter_grid:
             print(f"Tuning hyperparameter: {hyperparameter}")

@@ -4,11 +4,11 @@ nb_users: 100
 num_samples: 500
 dim_input: 60
 dim_output: 10
-alpha: 1.0
-beta: 1.0
-similarity: (1.0, 1.0)
+alpha: 0.0
+beta: 0.0
+similarity: iid_0_0
 ratio_training: 0.8
-iid: False
+iid: True
 batch_size: 400
 loss_fn: NLLLoss
 x_label: x 
