@@ -1,13 +1,13 @@
-name: flwrlabs/femnist
-model_name: CNN_FEMNIST
+name: uoft-cs/cifar10
+model_name: CNN_CIFAR
 nb_users: 40
 batch_size: 200
 partitioner_name: DirichletPartitioner
 partitioner_parameter: 0.1
-dim_output: 62
+dim_output: 10
 similarity: 0.1
-x_label: image
-y_label: character
+x_label: img
+y_label: label
 loss_fn: CrossEntropyLoss
 max_samples_per_client: 2500
 alpha:

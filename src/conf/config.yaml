@@ -1,5 +1,5 @@
 defaults:
-  - dataset: synthetic
+  - dataset: cifar10
   - _self_
 
 hydra:
