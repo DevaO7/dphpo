@@ -39,6 +39,7 @@ logs/
 src/data/MNIST/
 src/data/synthetic/data/
 src/tuning_results/
+src/tuning_results_fixed/
 checkpoints/
 src/job.sh
 src/run.sh

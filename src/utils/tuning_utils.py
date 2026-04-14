@@ -3,6 +3,133 @@ import os
 import matplotlib.pyplot as plt
 import csv
 
+import math
+
+def _sort_parameter_keys(keys, cfg):
+    try:
+        if cfg.results.transfer_mode == 'sigma':
+            return sorted(keys, key=float)
+        else:
+            return sorted(keys, key=float, reverse=True)
+    except Exception:
+        return sorted(keys, key=str)
+
+def plot_stacked_privacy_levels(
+    cfg,
+    loaded_results,
+    evaluation_metrics,
+    save_path,
+    show_legend=True,
+    panel_title=None,   # e.g. r"Tuning $\kappa$" or r"Tuning $C$"
+):
+    os.makedirs(save_path, exist_ok=True)
+
+    # ------------------------------------------------------------
+    # Plot settings
+    # ------------------------------------------------------------
+    FIG_WIDTH = 3.0
+    ROW_HEIGHT = 1.55
+
+    AXIS_LABEL_FONTSIZE = 8
+    ROW_TITLE_FONTSIZE = 7
+    PANEL_TITLE_FONTSIZE = 16
+    TICK_FONTSIZE = 7
+    LEGEND_FONTSIZE = 8
+    LINE_WIDTH = 1.0
+
+    # Keep same top whitespace in both modes for alignment
+    TOP_MARGIN = 0.91
+
+    parameter_values = _sort_parameter_keys(list(loaded_results.keys()), cfg)
+
+    for fold in range(cfg.tuning.cv_folds):
+        for metric in evaluation_metrics:
+            n_rows = len(parameter_values)
+
+            fig, axes = plt.subplots(
+                nrows=n_rows,
+                ncols=1,
+                sharex=True,
+                sharey=False,
+                figsize=(FIG_WIDTH, max(ROW_HEIGHT * n_rows, 3.0))
+            )
+
+            if n_rows == 1:
+                axes = [axes]
+
+            for ax, parameter_varied in zip(axes, parameter_values):
+                for hyperparameter in cfg.tuning.hyperparameter_grid:
+                    if hyperparameter not in loaded_results[parameter_varied]:
+                        continue
+
+                    y = loaded_results[parameter_varied][hyperparameter][fold][metric]
+                    # Legend labels: only numeric values
+                    ax.plot(y, label=f"{hyperparameter}", linewidth=LINE_WIDTH)
+
+                ax.set_ylabel(metric.replace("_", " ").title(), fontsize=AXIS_LABEL_FONTSIZE)
+                ax.text(
+                    0.98, 0.95,
+                    f"{cfg.results.transfer_mode} = {parameter_varied}",
+                    transform=ax.transAxes,
+                    ha="right", va="top",
+                    fontsize=ROW_TITLE_FONTSIZE
+                )
+                ax.grid(True, alpha=0.3)
+                ax.tick_params(axis="both", labelsize=TICK_FONTSIZE)
+
+            axes[-1].set_xlabel("Communication Round", fontsize=AXIS_LABEL_FONTSIZE)
+
+            # ------------------------------------------------------------
+            # Figure-level title first, legend below it
+            # If show_legend=False, neither title nor legend is shown
+            # ------------------------------------------------------------
+            if show_legend:
+                if panel_title is not None:
+                    fig.text(
+                        0.5, 0.985,
+                        panel_title,
+                        ha="center", va="top",
+                        fontsize=PANEL_TITLE_FONTSIZE
+                    )
+
+                handles, labels = axes[0].get_legend_handles_labels()
+                if handles:
+                    fig.legend(
+                        handles,
+                        labels,
+                        title=None,
+                        loc="upper center",
+                        ncol=len(labels),        # single-line legend
+                        fontsize=LEGEND_FONTSIZE,
+                        bbox_to_anchor=(0.5, 0.965),   # below title
+                        frameon=False,
+                        columnspacing=0.35,
+                        handlelength=1.0,
+                        handletextpad=0.2,
+                        borderaxespad=0.0
+                    )
+
+            # Keep identical reserved top space in both modes
+            fig.subplots_adjust(
+                top=TOP_MARGIN,
+                hspace=0.14,
+                left=0.22,
+                right=0.97,
+                bottom=0.06
+            )
+
+            legend_tag = "with_legend" if show_legend else "no_legend"
+
+            fig.savefig(
+                os.path.join(
+                    save_path,
+                    f"{cfg.results.transfer_mode}_stacked_{metric.lower().replace(' ', '_')}_{legend_tag}_fold_{fold}.png"
+                ),
+                dpi=300
+                # Do NOT use bbox_inches="tight" if you want perfect alignment
+            )
+            plt.close(fig)
+
 def perform_early_stopping_analysis(cfg, loaded_results, save_path):
     os.makedirs(save_path, exist_ok=True)
     if cfg.tuning.early_stopping_resource == "rounds":
@@ -139,6 +266,17 @@ def perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, ev
                 plt.tight_layout()
                 plt.savefig(os.path.join(save_path, f"{cfg.results.transfer_mode}_comparison_{metric.lower().replace(' ', '_')}_hyperparameter_{hyperparameter}_{fold}.png"))
                 plt.close()
+    
+    plot_stacked_privacy_levels(
+        cfg,
+        loaded_results,
+        evaluation_metrics=["train_loss"],
+        save_path=save_path,
+        show_legend=True,
+        panel_title=r"Tuning $\kappa$" if cfg.tuning.parameter_to_tune == 'step_size' else r"Tuning $C$"
+    )
+
+    
 
 def load_results(cfg, save_path, similarity):
     loaded_results = {}

@@ -16,8 +16,8 @@ SIGMA=20.0
 MAX_GRAD_NORM=2.0
 
 DP=True
-ROUNDS=500
-SIMILARITY=0.1
+ROUNDS=150
+SIMILARITY=iid_0_0
 CLIENT_RATIO=0.21
 RESULTS=True
 TUNE=False
@@ -26,8 +26,8 @@ LOG_PREFIX="0"
 TUNING_METHOD=cross_validation
 MIN_RESOURCE=10
 ELIMINATION_RATE=2
-ALPHA=1.0
-BETA=1.0
+ALPHA=0.0
+BETA=0.0
 
 # HYPERPARAMETER="[0.0025,0.005,0.01,0.02,0.04,0.08]"
 # HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02]"
@@ -36,17 +36,17 @@ BETA=1.0
 # HYPERPARAMETER="[2.0,2.5,3.0]"
 GLOBAL_STEP_SIZE=Adaptive
 LOCAL_STEP_SIZE=1.28
-PARAMETER_TO_TUNE="clipping"
+PARAMETER_TO_TUNE="step_size"
 if [ "$PARAMETER_TO_TUNE" == "step_size" ]; then
     # HYPERPARAMETER="[0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64]"
     # HYPERPARAMETER="[0.02,0.04,0.08,0.16,0.32,0.64,1.28,2.56,5.12,10.24,20.24]"
     # HYPERPARAMETER="[0.005,0.01,0.02,0.04,0.08,0.16]"
     # HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
-    HYPERPARAMETER="[0.08,0.16,0.32,0.64]"
+    # HYPERPARAMETER="[0.08,0.16,0.32,0.64]"
     # HYPERPARAMETER="[0.08,0.16,0.32,0.64]"
     # HYPERPARAMETER="[0.005,0.01,0.02,0.04,0.08,0.16]"
     # HYPERPARAMETER="[0.00125,0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64,1.28]"
-    # HYPERPARAMETER="[0.08,0.16,0.32,0.64,1.28,2.56,5.12,10.24]"
+    HYPERPARAMETER="[0.16,0.32,0.64,1.28,5.12,10.24]"
     # HYPERPARAMETER="[0.005,0.01,0.02,0.04,0.08,0.16]"
     # HYPERPARAMETER="[0.005,0.01,0.02,0.04,0.08,0.16]"
 elif [ "$PARAMETER_TO_TUNE" == "clipping" ]; then
@@ -56,16 +56,17 @@ elif [ "$PARAMETER_TO_TUNE" == "clipping" ]; then
     # HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5]"
     
 fi
-TRANSFER_MODE=sigma
+TRANSFER_MODE=client_ratio
 if [ "$TRANSFER_MODE" == "local_updates" ]; then
-    TRANSFER_PARAMETERS="[1,4,8,14,20,50]"
+    TRANSFER_PARAMETERS="[2,6,12,22,32,50]"
 elif [ "$TRANSFER_MODE" == "client_ratio" ]; then
     TRANSFER_PARAMETERS="[0.02,0.04,0.06,0.08,0.1,0.21]"
     # TRANSFER_PARAMETERS="[0.02,0.04,0.06,0.08,0.1,0.21]"
 elif [ "$TRANSFER_MODE" == "sampling_rate" ]; then
     TRANSFER_PARAMETERS="[0.028,0.056,0.081,0.105,0.1275,0.2]"
 elif [ "$TRANSFER_MODE" == "sigma" ]; then
-    TRANSFER_PARAMETERS="[137.0,71.0,49.0,38.0,32.0,20.0]"
+    TRANSFER_PARAMETERS="[110.0,60.0,40.0,30.0,25.0,20.0]"
+    # TRANSFER_PARAMETERS="[137.0,71.0,49.0,38.0,32.0,20.0]"
 elif [ "$TRANSFER_MODE" == "rounds" ]; then
     TRANSFER_PARAMETERS="[10,39,83,139,205,500]"
 fi
@@ -91,8 +92,9 @@ CUDA_VISIBLE_DEVICES=$GPU PYTHONUNBUFFERED=1 python main.py \
                         dataset.alpha=$ALPHA \
                         dataset.beta=$BETA \
                         run_settings.rounds=$ROUNDS \
-                        dataset.similarity=$SIMILARITY \
                         server.local_step=$LOCAL_STEP_SIZE \
+                        dataset.similarity=$SIMILARITY \
+                        
 
 wait
 echo "All jobs finished"

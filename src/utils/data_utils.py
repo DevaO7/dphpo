@@ -306,7 +306,7 @@ def get_data_loaders(cfg, train=True, per_client_loader=True):
     """
     Splits training data among clients, returns Global Test Set for server.
     """
-    if cfg.dataset.name in ["mnist", "cifar10", "flwrlabs/femnist", "ylecun/mnist"]:
+    if cfg.dataset.name in ["mnist", "cifar10", "flwrlabs/femnist", "ylecun/mnist", "uoft-cs/cifar10"]:
         train_data_loader, test_data_loader = get_loader_flwr(cfg)
     elif cfg.dataset.name == "synthetic":
         train_data_loader, test_data_loader = get_loader_from_raw_data(cfg, per_client_loader)
