@@ -34,7 +34,7 @@ tuning:
 
 server:
   constant_global_step: Heuristic
-  sampling_scheme: fixed_size
+  sampling_scheme: poisson_sampling
   global_step: 
   local_step: 2.56
   client_ratio: 0.02
