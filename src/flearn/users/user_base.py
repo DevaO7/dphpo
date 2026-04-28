@@ -29,7 +29,8 @@ class User:
                 noise_generator=self.generator, 
                 criterion=loss_fn, 
                 grad_sample_mode="ghost", 
-                loss_reduction="mean"
+                loss_reduction="mean", 
+                poisson_sampling=False
             )
             if resume:
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'][id])

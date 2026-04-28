@@ -18,14 +18,12 @@ trap 'echo; echo "Stopping all background jobs..."; kill 0' SIGINT SIGTERM
 # Then fill in the corresponding *_LIST and leave the fixed values below.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SWEEP_PARAM=client_ratio
+SWEEP_PARAM=sampling_rate
 
-SIGMA_LIST=(20.0 25.0 30.0 40.0 60.0 110.0)
-# SIGMA_LIST=(20.0)
-# LOCAL_UPDATES_LIST=(2 6 12 22 32)
-LOCAL_UPDATES_LIST=(2 6 12 22 32)
-SAMPLING_RATE_LIST=(0.015)
-CLIENT_RATIO_LIST=(0.02 0.04 0.06 0.08 0.1)
+SIGMA_LIST=(20.0)
+LOCAL_UPDATES_LIST=(8)
+SAMPLING_RATE_LIST=(0.15)
+CLIENT_RATIO_LIST=(0.02)
 
 # ─── Fixed values (used for all parameters NOT being swept) ───────────────────
 FIXED_SIGMA=20.0
@@ -45,18 +43,14 @@ LOCAL_STEP=1.28
 TUNING_TYPE=cross_validation
 
 # ─── Defaults for overridable settings ────────────────────────────────────────
-DEFAULT_GPU=1
+DEFAULT_GPU=5
 DEFAULT_RESUME=False
-PARAMETER_TO_TUNE="clipping" 
-GPU_LIST=(1) # GPUs to cycle through for parallel jobs
+PARAMETER_TO_TUNE="step_size"
+GPU_LIST=(5) # GPUs to cycle through for parallel jobs
 
 if [ "$PARAMETER_TO_TUNE" == "step_size" ]; then
-    # DEFAULT_HYPERPARAMETER="[10.24,20.24]"
-    # DEFAULT_HYPERPARAMETER="[0.0025,0.005,0.01,0.02,0.04,0.08]"
-    # DEFAULT_HYPERPARAMETER="[0.04,0.08,0.16,0.32,0.64,1.28]"
-    # DEFAULT_HYPERPARAMETER="[0.08,0.16,0.32,0.64,1.28,2.56]"
+    # DEFAULT_HYPERPARAMETER="[0.08,0.16,0.32,0.64,1.28,2.56,5.12,10.24]"
     DEFAULT_HYPERPARAMETER="[0.16]"
-    
 elif [ "$PARAMETER_TO_TUNE" == "clipping" ]; then
     DEFAULT_HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5]"
 fi
