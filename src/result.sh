@@ -36,7 +36,7 @@ BETA=0.0
 # HYPERPARAMETER="[2.0,2.5,3.0]"
 GLOBAL_STEP_SIZE=Adaptive
 LOCAL_STEP_SIZE=1.28
-PARAMETER_TO_TUNE="step_size"
+PARAMETER_TO_TUNE="clipping"
 if [ "$PARAMETER_TO_TUNE" == "step_size" ]; then
     # HYPERPARAMETER="[0.0025,0.005,0.01,0.02,0.04,0.08,0.16,0.32,0.64]"
     # HYPERPARAMETER="[0.02,0.04,0.08,0.16,0.32,0.64,1.28,2.56,5.12,10.24,20.24]"
@@ -52,11 +52,11 @@ if [ "$PARAMETER_TO_TUNE" == "step_size" ]; then
 elif [ "$PARAMETER_TO_TUNE" == "clipping" ]; then
     # HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5]"
     # HYPERPARAMETER="[1.0,1.5,2.0,2.5,3.0,3.5]"
-    HYPERPARAMETER="[1.0,2.0,3.0,4.0,5.0]"
-    # HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5]"
+    # HYPERPARAMETER="[0.5,1.0,2.0,3.0]"
+    HYPERPARAMETER="[0.5,1.0,1.5,2.0,2.5,3.0,3.5]"
     
 fi
-TRANSFER_MODE=client_ratio
+TRANSFER_MODE=local_updates
 if [ "$TRANSFER_MODE" == "local_updates" ]; then
     TRANSFER_PARAMETERS="[2,6,12,22,32,50]"
 elif [ "$TRANSFER_MODE" == "client_ratio" ]; then

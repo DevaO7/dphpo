@@ -49,6 +49,7 @@ src/temp_
 src/results
 src/checkpoints_Fixed
 src/results_Fixed
+src/result_non_iid.sh
 
 # Installer logs
 pip-log.txt
