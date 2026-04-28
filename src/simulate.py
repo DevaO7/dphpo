@@ -159,6 +159,7 @@ def tune_hyperparameters(cfg):
                     max_grad_norm=clipping_value, 
                     x_label=cfg.dataset.x_label,
                     y_label=cfg.dataset.y_label, 
+                    sampling_scheme=cfg.server.sampling_scheme
                 )
                 server.train()
     else:

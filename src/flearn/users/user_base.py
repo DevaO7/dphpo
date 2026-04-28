@@ -4,7 +4,7 @@ from opacus import PrivacyEngine
 from torch.utils.data import DataLoader
 
 class User: 
-    def __init__(self, model, train_loader, test_loader, loss_fn_name, use_cuda, local_updates, dp, optimizer, noise_multiplier, max_grad_norm, id, sample_rate, x_label, y_label, resume=False, checkpoint=None):
+    def __init__(self, model, train_loader, test_loader, loss_fn_name, use_cuda, local_updates, dp, optimizer, noise_multiplier, max_grad_norm, id, sample_rate, x_label, y_label, resume=False, checkpoint=None, sampling_scheme='fixed_size'):
         self.use_cuda = use_cuda
         self.traindataset = train_loader.dataset
         self.train_samples = len(self.traindataset)
@@ -30,7 +30,7 @@ class User:
                 criterion=loss_fn, 
                 grad_sample_mode="ghost", 
                 loss_reduction="mean", 
-                poisson_sampling=False
+                poisson_sampling=False if sampling_scheme == 'fixed_size' else True
             )
             if resume:
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'][id])

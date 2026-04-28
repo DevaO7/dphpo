@@ -7,7 +7,7 @@ import torch
 
 
 class Server:
-    def __init__(self, model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, resume=False):
+    def __init__(self, model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, sampling_scheme):
         self.users = []
         self.selected_users = []
         self.use_cuda = use_cuda
@@ -26,6 +26,7 @@ class Server:
         self.client_ratio = client_ratio
         self.dp = dp
         self.num_glob_iters = num_glob_iters
+        self.sampling_scheme = sampling_scheme
 
     def send_parameters(self):
         """Users setting their parameters from the server."""
@@ -73,7 +74,7 @@ class Server:
         self.selected_users = [c for c in self.users if c.id in selected_set]
         return self.selected_users
 
-    def select_users(self, glob_iter):
+    def select_users_fixed_sampling(self, glob_iter):
         assert 0.0 < self.client_ratio <= 1.0
         ids = [c.id for c in self.users]
         np.random.seed(glob_iter)

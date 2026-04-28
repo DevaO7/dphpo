@@ -29,11 +29,12 @@ tuning:
   elimination_rate: 2
   cv_folds: 1
   hyperparameter_grid: [0.5]
-  save_path: tuning_results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp
+  save_path: tuning_results/${server.sampling_scheme}/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp
   metric: train_loss
 
 server:
   constant_global_step: Heuristic
+  sampling_scheme: fixed_size
   global_step: 
   local_step: 2.56
   client_ratio: 0.02
