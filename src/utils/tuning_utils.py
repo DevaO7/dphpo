@@ -20,7 +20,9 @@ def plot_stacked_privacy_levels(
     evaluation_metrics,
     save_path,
     show_legend=True,
-    panel_title=None,              # e.g. r"Tuning $\kappa$" or r"Tuning $C$"
+    panel_title=None,                         # e.g. r"Tuning $\kappa$" or r"Tuning $C$"
+    final_round_markers=None,      # e.g. [20, 40, 80]
+    marker_labels=True,            # whether to annotate the vertical lines
     final_round_markers=None,      # e.g. [20, 40, 80]
     marker_labels=True,            # whether to annotate the vertical lines
 ):
@@ -59,12 +61,37 @@ def plot_stacked_privacy_levels(
                 axes = [axes]
 
             for idx, (ax, parameter_varied) in enumerate(zip(axes, parameter_values)):
+            for idx, (ax, parameter_varied) in enumerate(zip(axes, parameter_values)):
                 for hyperparameter in cfg.tuning.hyperparameter_grid:
                     if hyperparameter not in loaded_results[parameter_varied]:
                         continue
 
                     y = loaded_results[parameter_varied][hyperparameter][fold][metric]
                     ax.plot(y, label=f"{hyperparameter}", linewidth=LINE_WIDTH)
+
+                # Add vertical lines only to the first subplot (final training setting)
+                if idx == 0 and final_round_markers is not None:
+                    for t_marker in final_round_markers:
+                        ax.axvline(
+                            x=t_marker,
+                            color="black",
+                            linestyle="--",
+                            linewidth=0.8,
+                            alpha=0.7
+                        )
+
+                        if marker_labels:
+                            ymin, ymax = ax.get_ylim()
+                            ax.text(
+                                t_marker,
+                                ymax,
+                                f"{t_marker}",
+                                ha="center",
+                                va="bottom",
+                                fontsize=6,
+                                rotation=90,
+                                color="black"
+                            )
 
                 # Add vertical lines only to the first subplot (final training setting)
                 if idx == 0 and final_round_markers is not None:
@@ -124,7 +151,9 @@ def plot_stacked_privacy_levels(
                         title=None,
                         loc="upper center",
                         ncol=len(labels),
+                        ncol=len(labels),
                         fontsize=LEGEND_FONTSIZE,
+                        bbox_to_anchor=(0.5, 0.965),
                         bbox_to_anchor=(0.5, 0.965),
                         frameon=False,
                         columnspacing=0.35,
@@ -143,15 +172,18 @@ def plot_stacked_privacy_levels(
 
             legend_tag = "with_legend" if show_legend else "no_legend"
             marker_tag = "with_Tmarkers" if final_round_markers is not None else "no_Tmarkers"
+            marker_tag = "with_Tmarkers" if final_round_markers is not None else "no_Tmarkers"
 
             fig.savefig(
                 os.path.join(
                     save_path,
                     f"{cfg.results.transfer_mode}_stacked_{metric.lower().replace(' ', '_')}_{legend_tag}_{marker_tag}_fold_{fold}.png"
+                    f"{cfg.results.transfer_mode}_stacked_{metric.lower().replace(' ', '_')}_{legend_tag}_{marker_tag}_fold_{fold}.png"
                 ),
                 dpi=300
             )
             plt.close(fig)
+
 
 
 def perform_early_stopping_analysis(cfg, loaded_results, save_path):
@@ -284,7 +316,29 @@ def perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, ev
                 ax.set_ylabel(metric)
                 ax.set_title(f"{metric} vs Communication Rounds")
                 ax.legend(title=None)
+                ax = plt.gca()
+                round_markers = [5,17,38,65,95,150]
+                for t_marker in round_markers:
+                    ax.axvline(
+                        x=t_marker,
+                        color="black",
+                        linestyle="--",
+                        linewidth=0.9,
+                        alpha=0.7
+                    )
+                ax.set_xticks(round_markers)
+                ax.set_xlabel("Communication Round")
+                ax.set_ylabel(metric)
+                ax.set_title(f"{metric} vs Communication Rounds")
+                ax.legend(title=None)
                 plt.tight_layout()
+                plt.savefig(
+                    os.path.join(
+                        save_path,
+                        f"{metric.lower().replace(' ', '_')}_comparison_{fold}_{parameter_varied}_{cfg.results.transfer_mode}.png"
+                    ),
+                    dpi=300
+                )
                 plt.savefig(
                     os.path.join(
                         save_path,
@@ -313,6 +367,11 @@ def perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, ev
         loaded_results,
         evaluation_metrics=["train_loss"],
         save_path=save_path,
+        show_legend=True if cfg.results.transfer_mode == 'sigma' else False,
+        panel_title=r"Tuning $\kappa$" if cfg.tuning.parameter_to_tune == 'step_size' else r"Tuning $C$",
+        final_round_markers=[],
+        marker_labels=True
+    )
         show_legend=True if cfg.results.transfer_mode == 'sigma' else False,
         panel_title=r"Tuning $\kappa$" if cfg.tuning.parameter_to_tune == 'step_size' else r"Tuning $C$",
         final_round_markers=[],
