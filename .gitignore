@@ -40,6 +40,8 @@ src/data/MNIST/
 src/data/synthetic/data/
 src/tuning_results/
 src/tuning_results_fixed/
+src/tuning_results_Fixed/
+src/tuning_results_old/
 src/tuning_results_junk/
 checkpoints/
 src/job.sh
@@ -57,6 +59,8 @@ pip-log.txt
 pip-delete-this-directory.txt
 src/results
 src/job_run.sh
+AGENTS.md
+docs/
 
 # Unit test / coverage reports
 htmlcov/
