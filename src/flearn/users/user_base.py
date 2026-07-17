@@ -34,6 +34,8 @@ class User:
             )
             if resume:
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'][id])
+        else:
+            self.dp_train_loader = DataLoader(self.traindataset, batch_size=self.batch_size, shuffle=True, drop_last=False)
         self.delta_model = [torch.zeros_like(p.data) for p in self.model.parameters() if p.requires_grad]
         self.server_model = [torch.zeros_like(p.data) for p in self.model.parameters() if p.requires_grad]
         self.local_model = copy.deepcopy(list(self.model.parameters()))

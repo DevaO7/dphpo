@@ -19,6 +19,7 @@ low_resource_config = {
     "l": 0.21,
     "s": 0.2,
     "sigma_gaussian": 20,
+    "sigma_is_actual": True
 }
 
 high_resource_config = {
@@ -28,21 +29,20 @@ high_resource_config = {
     "l": 0.21,
     "s": 0.2,
     "sigma_gaussian": 20,
+    "sigma_is_actual": True
 }
-
 
 low_resource_curve = compute_dpfedavg_rdp(
     config=low_resource_config,
     orders=orders,
-    accounting_method="numerical",
+    accounting_method="bound",
 )
 
 high_resource_curve = compute_dpfedavg_rdp(
     config=high_resource_config,
     orders=orders,
-    accounting_method="numerical",
+    accounting_method="bound",
 )
-
 
 top1_result = compute_top1_rdp(
     base_rdp_curve=high_resource_curve,

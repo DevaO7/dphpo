@@ -19,42 +19,46 @@ class UserAVG(User):
             self.optimizer = optimizer
         self.id = id
 
-    def train_no_dp(self, global_iter):
+    def train_poisson_sampling(self, global_iter, dp):
         if self.use_cuda:
             self.model = self.model.cuda()
         self.model.train()
-        sampler_g = torch.Generator().manual_seed(self.id + global_iter*100)
-        sampler = RandomSampler(
-                    self.traindataset,
-                    replacement=True,
-                    generator=sampler_g, 
-                    num_samples=self.local_updates*self.batch_size
-                )
-        train_loader = DataLoader(self.traindataset, batch_size=self.batch_size, sampler=sampler, shuffle=False, drop_last=True)
-        it = iter(train_loader)
+        g = torch.Generator().manual_seed(self.id + global_iter * 100)
+        self.dp_train_loader = switch_generator(data_loader=self.dp_train_loader, generator=g)
+
+        it = iter(self.dp_train_loader)
         for step in range(1, self.local_updates + 1):
-            batch = next(it)
-            X, y = batch[self.x_label], batch[self.y_label]
+            try:
+                batch = next(it)
+            except StopIteration:
+                it = iter(self.dp_train_loader)
+                batch = next(it)
+            X, y = batch[self.x_label], batch[self.y_label] 
+            if y.numel() == 0:
+                continue
             if self.use_cuda:
                 X, y = X.cuda(), y.cuda()
             self.optimizer.zero_grad()
             output = self.model(X)
-            loss = self.loss(output, y)
+            if dp:
+                loss = self.dp_loss(output, y)
+            else:
+                loss = self.loss(output, y)
             loss.backward()
             self.optimizer.step()
-
+        self.optimizer.zero_grad(set_to_none=True)
         self.model.cpu()
         for local, server, delta in zip(self.model.parameters(), self.server_model, self.delta_model):
             delta.data = local.data.detach() - server.data.detach()
-    
-    def train_dp(self, global_iter):
+
+    def train_fixed_size_sampling(self, global_iter, dp):
         if self.use_cuda:
             self.model = self.model.cuda()
         self.model.train()
+        train_idx = np.arange(self.train_samples)
         for step in range(1, self.local_updates + 1):
-            np.random.seed(500 * (global_iter + 1) + step + 1)
-            torch.manual_seed(500 * (global_iter + 1) + step + 1)
-            train_idx = np.arange(self.train_samples)
+            np.random.seed(self.id + global_iter * 100 + step)
+            torch.manual_seed(self.id + global_iter * 100 + step)
             train_sampler = SubsetRandomSampler(train_idx)
             it = iter(DataLoader(self.traindataset, self.batch_size, sampler=train_sampler))
             batch = next(it)
@@ -65,12 +69,13 @@ class UserAVG(User):
                 X, y = X.cuda(), y.cuda()
             self.optimizer.zero_grad()
             output = self.model(X)
-            loss = self.dp_loss(output, y)
+            if dp:
+                loss = self.dp_loss(output, y)
+            else:
+                loss = self.loss(output, y)
             loss.backward()
             self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
         self.model.cpu()
         for local, server, delta in zip(self.model.parameters(), self.server_model, self.delta_model):
             delta.data = local.data.detach() - server.data.detach()
-        
-        

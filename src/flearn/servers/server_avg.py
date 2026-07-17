@@ -82,10 +82,10 @@ class FedAvg(Server):
                 print("No users selected, skipping this round.")
                 continue
             for user in self.selected_users:
-                if self.dp: 
-                    user.train_dp(glob_iter)
+                if self.sampling_scheme == 'poisson_sampling':
+                    user.train_poisson_sampling(glob_iter, self.dp)
                 else:
-                    user.train_no_dp(glob_iter)
+                    user.train_fixed_size_sampling(glob_iter, self.dp)
             self.aggregate_parameters()
             if glob_iter % 10 == 0:
                 self.save_checkpoint(glob_iter)
