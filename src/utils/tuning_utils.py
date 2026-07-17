@@ -23,8 +23,6 @@ def plot_stacked_privacy_levels(
     panel_title=None,                         # e.g. r"Tuning $\kappa$" or r"Tuning $C$"
     final_round_markers=None,      # e.g. [20, 40, 80]
     marker_labels=True,            # whether to annotate the vertical lines
-    final_round_markers=None,      # e.g. [20, 40, 80]
-    marker_labels=True,            # whether to annotate the vertical lines
 ):
     os.makedirs(save_path, exist_ok=True)
 
@@ -60,7 +58,6 @@ def plot_stacked_privacy_levels(
             if n_rows == 1:
                 axes = [axes]
 
-            for idx, (ax, parameter_varied) in enumerate(zip(axes, parameter_values)):
             for idx, (ax, parameter_varied) in enumerate(zip(axes, parameter_values)):
                 for hyperparameter in cfg.tuning.hyperparameter_grid:
                     if hyperparameter not in loaded_results[parameter_varied]:
@@ -151,9 +148,7 @@ def plot_stacked_privacy_levels(
                         title=None,
                         loc="upper center",
                         ncol=len(labels),
-                        ncol=len(labels),
                         fontsize=LEGEND_FONTSIZE,
-                        bbox_to_anchor=(0.5, 0.965),
                         bbox_to_anchor=(0.5, 0.965),
                         frameon=False,
                         columnspacing=0.35,
@@ -367,11 +362,6 @@ def perform_simple_cross_validation_analysis(cfg, loaded_results, similarity, ev
         loaded_results,
         evaluation_metrics=["train_loss"],
         save_path=save_path,
-        show_legend=True if cfg.results.transfer_mode == 'sigma' else False,
-        panel_title=r"Tuning $\kappa$" if cfg.tuning.parameter_to_tune == 'step_size' else r"Tuning $C$",
-        final_round_markers=[],
-        marker_labels=True
-    )
         show_legend=True if cfg.results.transfer_mode == 'sigma' else False,
         panel_title=r"Tuning $\kappa$" if cfg.tuning.parameter_to_tune == 'step_size' else r"Tuning $C$",
         final_round_markers=[],

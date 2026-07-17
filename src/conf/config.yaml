@@ -14,7 +14,7 @@ run_mode:
   compile_results: False
 
 run_settings:
-  rounds: 150
+  rounds: 1
   algorithm: FedAvg
   seed: 0
   use_cuda: True
@@ -22,8 +22,8 @@ run_settings:
   resume_from_checkpoint: False
 
 tuning:
-  parameter_to_tune: clipping
-  type: early_stopping
+  parameter_to_tune: step_size
+  type: cross_validation
   early_stopping_resource: rounds
   min_resource: 10
   elimination_rate: 2
@@ -33,7 +33,7 @@ tuning:
   metric: train_loss
 
 server:
-  constant_global_step: Heuristic
+  constant_global_step: Adaptive
   sampling_scheme: poisson_sampling
   global_step: 
   local_step: 2.56
@@ -43,7 +43,7 @@ server:
   sampling_rate: 0.2
   dp: True
   sigma: 5.0
-  max_grad_norm: 
+  max_grad_norm: 1.0
 
 results:
   client_ratio_vs_beta: True
