@@ -28,8 +28,8 @@ def truncate_csv_file(csv_path: str, keep_round: int) -> None:
     os.replace(tmp_path, csv_path)
 
 class FedAvg(Server):
-    def __init__(self, model, train_data_loader, test_data_loader, num_glob_iters, save_path, loss_fn_name, local_learning_rate, global_learning_rate, weight_decay, use_cuda, similarity, file_name, client_ratio, dp, local_updates, sample_rate, noise_multiplier, max_grad_norm, x_label, y_label, sampling_scheme):
-        super().__init__(model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, sampling_scheme)
+    def __init__(self, model, train_data_loader, test_data_loader, num_glob_iters, save_path, loss_fn_name, local_learning_rate, global_learning_rate, weight_decay, use_cuda, similarity, file_name, client_ratio, dp, local_updates, sample_rate, noise_multiplier, max_grad_norm, x_label, y_label, client_sampling_scheme, data_sampling_scheme):
+        super().__init__(model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, client_sampling_scheme, data_sampling_scheme)
         self.train_data_loader = train_data_loader
         self.test_data_loader = test_data_loader
         
@@ -65,7 +65,7 @@ class FedAvg(Server):
                 y_label=y_label, 
                 resume=resume, 
                 checkpoint=self.checkpoint if resume else None, 
-                sampling_scheme=sampling_scheme
+                data_sampling_scheme=data_sampling_scheme
             )
             self.users.append(user)
 
@@ -74,15 +74,15 @@ class FedAvg(Server):
             print("-------------Round number: ", glob_iter, " -------------")
             self.send_parameters()
             self.evaluate(glob_iter)
-            if self.sampling_scheme == 'fixed_size':
+            if self.client_sampling_scheme == 'fixed_size_sampling':
                  self.selected_users = self.select_users_fixed_sampling(glob_iter)
-            elif self.sampling_scheme == 'poisson_sampling':
+            elif self.client_sampling_scheme == 'poisson_sampling':
                 self.selected_users = self.select_users_poisson_sampling(glob_iter)
             if len(self.selected_users) == 0:
                 print("No users selected, skipping this round.")
                 continue
             for user in self.selected_users:
-                if self.sampling_scheme == 'poisson_sampling':
+                if self.data_sampling_scheme == 'poisson_sampling':
                     user.train_poisson_sampling(glob_iter, self.dp)
                 else:
                     user.train_fixed_size_sampling(glob_iter, self.dp)

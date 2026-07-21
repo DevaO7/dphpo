@@ -34,7 +34,8 @@ tuning:
 
 server:
   constant_global_step: Adaptive
-  sampling_scheme: poisson_sampling
+  client_sampling_scheme: poisson_sampling
+  data_sampling_scheme: fixed_size_sampling
   global_step: 
   local_step: 2.56
   client_ratio: 0.02

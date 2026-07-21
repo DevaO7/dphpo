@@ -7,7 +7,7 @@ import torch
 
 
 class Server:
-    def __init__(self, model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, sampling_scheme):
+    def __init__(self, model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, client_sampling_scheme, data_sampling_scheme):
         self.users = []
         self.selected_users = []
         self.use_cuda = use_cuda
@@ -26,7 +26,8 @@ class Server:
         self.client_ratio = client_ratio
         self.dp = dp
         self.num_glob_iters = num_glob_iters
-        self.sampling_scheme = sampling_scheme
+        self.data_sampling_scheme = data_sampling_scheme
+        self.client_sampling_scheme = client_sampling_scheme
 
     def send_parameters(self):
         """Users setting their parameters from the server."""
