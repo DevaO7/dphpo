@@ -1,0 +1,24 @@
+# src/conf/experiment/exp1_compute_matched_utility.yaml
+
+name: exp1_compute_matched_utility
+
+runner: utility_compute_plot
+
+run_mode:
+  generate_plan: true
+  run_baseline_simulation: false
+
+base_E_K_list: [5, 10, 15]
+local_updates_schedule: [6, 50]
+num_trials: 5
+run_id: 1
+hp_configuration_ids: ["H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10"]
+eta: 0
+
+output:
+  results_root: ${paths.results_root}
+  plan_filename: papernot_baseline.JSON
+
+n_stage_tuning:
+  E_K_each_stage: [3]
+  

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import math
 from numbers import Integral
 
+import numpy as np
 from scipy.optimize import brentq
 from scipy.special import gammaln, gammasgn
 
@@ -311,7 +312,6 @@ def _solve_gamma_for_conditional_mean(
         f"target_mean={target_mean}, m={m}, eta={eta}."
     )
 
-
 @dataclass(frozen=True)
 class TNBDistribution:
     """
@@ -409,6 +409,83 @@ class TNBDistribution:
         return _conditional_mean_from_parameters(
             m, self.eta, self.gamma
         )
+
+    def sample(self, rng: np.random.Generator | None = None) -> int:
+        """Draw and return one value of K0 from this distribution."""
+        if rng is None:
+            rng = np.random.default_rng()
+
+        one_minus_gamma = 1.0 - self.gamma
+
+        if _is_eta_zero(self.eta):
+            return int(rng.logseries(one_minus_gamma))
+
+        if self.eta > 0.0 and self.gamma**self.eta <= 0.5:
+            k = 0
+            while k == 0:
+                k = int(rng.negative_binomial(self.eta, self.gamma))
+            return k
+
+        probability = (
+            self.eta
+            * one_minus_gamma
+            / math.expm1(-self.eta * math.log(self.gamma))
+        )
+        cumulative_probability = probability
+        uniform = float(rng.random())
+        k = 1
+
+        while uniform >= cumulative_probability:
+            probability *= (
+                (self.eta + k) * one_minus_gamma / (k + 1.0)
+            )
+            k += 1
+            next_cumulative_probability = cumulative_probability + probability
+
+            if next_cumulative_probability == cumulative_probability:
+                raise ArithmeticError(
+                    "The TNB tail became too small to sample numerically."
+                )
+
+            cumulative_probability = next_cumulative_probability
+
+        return k
+
+    def sample_conditional(
+        self,
+        m: int,
+        rng: np.random.Generator | None = None,
+    ) -> int:
+        """Draw and return K0 conditioned on K0 >= m."""
+        m = _validate_positive_integer(m, "m")
+
+        if m == 1:
+            return self.sample(rng)
+        if rng is None:
+            rng = np.random.default_rng()
+
+        probability = self.pmf(m) / self.survival_probability(m)
+        cumulative_probability = probability
+        uniform = float(rng.random())
+        k = m
+        one_minus_gamma = 1.0 - self.gamma
+
+        while uniform >= cumulative_probability:
+            probability *= (
+                (self.eta + k) * one_minus_gamma / (k + 1.0)
+            )
+            k += 1
+            next_cumulative_probability = cumulative_probability + probability
+
+            if next_cumulative_probability == cumulative_probability:
+                raise ArithmeticError(
+                    "The conditional TNB tail became too small to sample "
+                    "numerically."
+                )
+
+            cumulative_probability = next_cumulative_probability
+
+        return k
 
     def log_expected_binomial(self, m: int) -> float:
         r"""

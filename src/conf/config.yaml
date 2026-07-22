@@ -1,10 +1,16 @@
 defaults:
+  - experiment: exp1_compute_matched_utility
   - dataset: synthetic
   - _self_
 
+paths:
+  results_root: results
+
 hydra:
   run:
-    dir: dump
+    dir: ${paths.results_root}/${experiment.name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
 
 run_mode:
   find_optimum: False
