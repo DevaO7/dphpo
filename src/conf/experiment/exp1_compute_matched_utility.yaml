@@ -3,15 +3,22 @@
 name: exp1_compute_matched_utility
 
 runner: utility_compute_plot
+seed: 1
+
+simulation:
+  run_hp_configuration: H1
+  times: 18
+  base_seed: 100
 
 run_mode:
   generate_plan: true
   run_baseline_simulation: false
+  generate_task_list: false
 
 base_E_K_list: [5, 10, 15]
 local_updates_schedule: [6, 50]
 num_trials: 5
-run_id: 1
+run_id: run_id_1
 hp_configuration_ids: ["H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10"]
 eta: 0
 

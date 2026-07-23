@@ -1,0 +1,30 @@
+H1:
+  step_size: 0.01
+
+H2:
+  step_size: 0.02
+
+H3:
+  step_size: 0.04
+
+H4:
+  step_size: 0.08
+
+H5:
+  step_size: 0.16
+
+H6:
+  step_size: 0.32
+
+H7:
+  step_size: 0.64
+
+H8:
+  step_size: 1.28
+
+H9:
+  step_size: 2.56
+
+H10:
+  step_size: 5.12
+ 

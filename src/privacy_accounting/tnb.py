@@ -484,7 +484,6 @@ class TNBDistribution:
                 )
 
             cumulative_probability = next_cumulative_probability
-
         return k
 
     def log_expected_binomial(self, m: int) -> float:
