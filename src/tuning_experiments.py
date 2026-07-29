@@ -1,11 +1,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import hydra
-from omegaconf import DictConfig
+from hydra.core.hydra_config import HydraConfig
+from omegaconf import DictConfig, OmegaConf
 from privacy_accounting.tnb import _solve_gamma_for_conditional_mean, TNBDistribution
 from pathlib import Path
 import json
 from collections import Counter
+from utils.data_utils import get_data_loaders, set_seed
+from flearn.trainmodel import models
+from flearn.servers.server_avg import FedAvg
 
 
 def get_selected_learning_rate(config: DictConfig) -> float:
@@ -252,10 +256,53 @@ def utility_compute_plot(config: DictConfig) -> None:
 
 
     if exp_config.run_mode.run_baseline_simulation:
+        set_seed(config.run_settings.seed)
+        if config.dataset.name == 'synthetic':
+            model = getattr(models, config.dataset.model_name)(input_dim=config.dataset.dim_input, output_dim=config.dataset.dim_output)
+        else:
+            model = getattr(models, config.dataset.model_name)()
         learning_rate = get_selected_learning_rate(config)
-        for i in range(exp_config.simulation.times):
-            pass
-
+        if config.server.constant_global_step == 'Fixed':
+            global_step = config.server.global_step
+            local_step = learning_rate
+        elif config.server.constant_global_step == 'Adaptive':
+            global_step = (config.server.client_ratio*config.dataset.nb_users)**0.5
+            local_step = learning_rate/(config.server.local_updates*global_step)
+        main_path = Path(HydraConfig.get().runtime.output_dir)/ "simulations"
+        clipping_value = config.server.max_grad_norm
+        for seed in range(exp_config.simulation.times):
+            save_path = main_path / config.experiment.simulation.run_hp_configuration / f"seed_{seed}"
+            save_path.mkdir(parents=True, exist_ok=True)
+            train_data_loader, test_data_loader = get_data_loaders(config, per_client_loader=True)
+            server = FedAvg(
+                    model=model,
+                    train_data_loader=train_data_loader,
+                    test_data_loader=test_data_loader,
+                    save_path=save_path,
+                    file_name=None,
+                    num_glob_iters=config.run_settings.rounds,
+                    loss_fn_name=config.dataset.loss_fn, 
+                    local_learning_rate=local_step,
+                    global_learning_rate=global_step,
+                    weight_decay=config.server.weight_decay,
+                    use_cuda=config.run_settings.use_cuda, 
+                    similarity=config.dataset.similarity,
+                    client_ratio=config.server.client_ratio, 
+                    dp=config.server.dp, 
+                    local_updates=config.server.local_updates, 
+                    sample_rate=config.server.sampling_rate, 
+                    noise_multiplier=config.server.sigma, 
+                    max_grad_norm=clipping_value, 
+                    x_label=config.dataset.x_label,
+                    y_label=config.dataset.y_label, 
+                    client_sampling_scheme=config.server.client_sampling_scheme, 
+                    data_sampling_scheme=config.server.data_sampling_scheme,
+                    stage=exp_config.simulation.stage, 
+                    stage_1_end=exp_config.simulation.stage_1_end, 
+                    base_seed=seed
+                )
+            server.train()
+            OmegaConf.save(config, save_path / f"stage_{exp_config.simulation.stage}_config.yaml", resolve=True)
 
 EXPERIMENT_RUNNERS = {
     "utility_compute_plot": utility_compute_plot,

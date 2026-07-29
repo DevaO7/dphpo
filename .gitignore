@@ -32,6 +32,7 @@ MANIFEST
 *.manifest
 *.spec
 
+src/job_2.sh
 src/temp.py
 src/test.py
 data/synthetic/data
@@ -54,6 +55,7 @@ src/checkpoints_Fixed
 src/results_Fixed
 src/result_non_iid.sh
 src/privacy_accounting/test.py
+runs
 
 
 # Installer logs

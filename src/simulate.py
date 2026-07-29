@@ -1,31 +1,12 @@
 from flearn.trainmodel import models
 from flearn.servers.server_avg import FedAvg
-from utils.data_utils import get_data_loaders, visualize_partition
+from utils.data_utils import get_data_loaders, visualize_partition, set_seed
 from utils.tuning_utils import perform_early_stopping_analysis, perform_simple_cross_validation_analysis, load_results
 import torch
 import numpy as np
 import os
-import random
 import csv
 import matplotlib.pyplot as plt
-
-def set_seed(seed=42):
-    # 1. Python & NumPy
-    random.seed(seed)
-    np.random.seed(seed)
-    
-    # 2. PyTorch (CPU)
-    torch.manual_seed(seed)
-    
-    # 3. PyTorch (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed) # for multi-GPU
-    
-    # 4. Force Deterministic Algorithms
-    # Warning: This can slow down training slightly
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 def find_optimum(cfg, train_loader, test_loader, epochs=1000, log_interval=50, lr=0.01):
     # Load the model

@@ -11,10 +11,10 @@ import copy
 
 
 class UserAVG(User):
-    def __init__(self, id, model, train_loader, test_loader, loss_fn_name, local_learning_rate, weight_decay, use_cuda, local_updates, sample_rate, dp, noise_multiplier, max_grad_norm, x_label, y_label, resume=False, checkpoint=None, data_sampling_scheme='fixed_size_sampling'):
+    def __init__(self, id, model, train_loader, test_loader, loss_fn_name, local_learning_rate, weight_decay, use_cuda, local_updates, sample_rate, dp, noise_multiplier, max_grad_norm, x_label, y_label, resume=False, checkpoint=None, data_sampling_scheme='fixed_size_sampling', base_seed=0, dp_noise_seed=None):
         self.model = copy.deepcopy(model)
         optimizer = FedAvgOptimizer(self.model.parameters(), lr=local_learning_rate, weight_decay=weight_decay)
-        super().__init__(model, train_loader=train_loader, test_loader=test_loader, loss_fn_name=loss_fn_name, use_cuda=use_cuda, local_updates=local_updates, dp=dp, optimizer=optimizer, noise_multiplier=noise_multiplier, max_grad_norm=max_grad_norm, id=id, sample_rate=sample_rate, x_label=x_label, y_label=y_label, resume=resume, checkpoint=checkpoint, data_sampling_scheme=data_sampling_scheme)
+        super().__init__(model, train_loader=train_loader, test_loader=test_loader, loss_fn_name=loss_fn_name, use_cuda=use_cuda, local_updates=local_updates, dp=dp, optimizer=optimizer, noise_multiplier=noise_multiplier, max_grad_norm=max_grad_norm, id=id, sample_rate=sample_rate, x_label=x_label, y_label=y_label, resume=resume, checkpoint=checkpoint, data_sampling_scheme=data_sampling_scheme, base_seed=base_seed, dp_noise_seed=dp_noise_seed)
         if not dp:
             self.optimizer = optimizer
         self.id = id
@@ -23,7 +23,7 @@ class UserAVG(User):
         if self.use_cuda:
             self.model = self.model.cuda()
         self.model.train()
-        g = torch.Generator().manual_seed(self.id + global_iter * 100)
+        g = torch.Generator().manual_seed(self.id + global_iter * 100 + self.base_seed*400)
         self.dp_train_loader = switch_generator(data_loader=self.dp_train_loader, generator=g)
 
         it = iter(self.dp_train_loader)
@@ -57,8 +57,8 @@ class UserAVG(User):
         self.model.train()
         train_idx = np.arange(self.train_samples)
         for step in range(1, self.local_updates + 1):
-            np.random.seed(self.id + global_iter * 100 + step)
-            torch.manual_seed(self.id + global_iter * 100 + step)
+            np.random.seed(self.id + global_iter * 100 + step + self.base_seed*500)
+            torch.manual_seed(self.id + global_iter * 100 + step + self.base_seed*500)
             train_sampler = SubsetRandomSampler(train_idx)
             it = iter(DataLoader(self.traindataset, self.batch_size, sampler=train_sampler))
             batch = next(it)

@@ -15,13 +15,13 @@ hydra:
 
 run_mode:
   find_optimum: False
-  tune_hyperparameter: True
+  tune_hyperparameter: False
   compile_tuning_results: False
   simulate: False
   compile_results: False
 
 run_settings:
-  rounds: 1
+  rounds: 150
   algorithm: FedAvg
   seed: 0
   use_cuda: True
@@ -29,35 +29,35 @@ run_settings:
   resume_from_checkpoint: False
 
 tuning:
-  parameter_to_tune: step_size
-  type: cross_validation
-  early_stopping_resource: rounds
-  min_resource: 10
-  elimination_rate: 2
-  cv_folds: 1
-  hyperparameter_grid: [0.5]
-  save_path: tuning_results/${server.sampling_scheme}/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}_${run_settings.rounds}T_${server.local_updates}K_${server.sampling_rate}sr_${server.dp}dp
-  metric: train_loss
+  parameter_to_tune: 
+  type: 
+  early_stopping_resource: 
+  min_resource: 
+  elimination_rate: 
+  cv_folds: 
+  hyperparameter_grid: 
+  save_path: 
+  metric: 
 
 server:
   constant_global_step: Adaptive
   client_sampling_scheme: poisson_sampling
   data_sampling_scheme: fixed_size_sampling
   global_step: 
-  local_step: 2.56
-  client_ratio: 0.02
-  local_updates: 50
+  local_step: 
+  client_ratio: 0.21
+  local_updates: 6
   weight_decay: 0.0
   sampling_rate: 0.2
   dp: True
-  sigma: 5.0
-  max_grad_norm: 1.0
+  sigma: 20.0
+  max_grad_norm: 2.0
 
 results:
-  client_ratio_vs_beta: True
-  transfer_mode: client_ratio
-  transfer_parameters: [0.1,0.13,0.15,0.17,0.21]
-  result_path: results/${run_settings.algorithm}/${dataset.name}/${dataset.model_name}
+  client_ratio_vs_beta: 
+  transfer_mode: 
+  transfer_parameters: 
+  result_path: 
 
   # [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8]
   # [0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12]

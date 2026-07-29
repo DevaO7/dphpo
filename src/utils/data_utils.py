@@ -7,12 +7,29 @@ from data.synthetic.data_generator import SyntheticDataset
 import os
 from typing import Callable, Dict, Tuple, Optional, List, Union
 from dataclasses import dataclass
-import flwr_datasets.partitioner as partitioners
-from flwr_datasets import FederatedDataset
 from torchvision.transforms import ToTensor
 import matplotlib.pyplot as plt
 import numpy as np
 from data.synthetic.data_generator import generate_synthetic as generate_synthetic_dataset
+import random
+
+def set_seed(seed=42):
+    # 1. Python & NumPy
+    random.seed(seed)
+    np.random.seed(seed)
+    
+    # 2. PyTorch (CPU)
+    torch.manual_seed(seed)
+    
+    # 3. PyTorch (GPU)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed) # for multi-GPU
+    
+    # 4. Force Deterministic Algorithms
+    # Warning: This can slow down training slightly
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 @dataclass
@@ -31,6 +48,18 @@ class FlowerFederatedLoaders:
     max_number_samples_per_client: Optional[int] = 100
 
     def __post_init__(self) -> None:
+        # Flower is only needed for the non-synthetic dataset path. Import it
+        # lazily so synthetic experiments do not pay its substantial import
+        # and shared-filesystem I/O cost in every parallel worker.
+        try:
+            import flwr_datasets.partitioner as partitioners
+            from flwr_datasets import FederatedDataset
+        except ImportError as error:
+            raise ImportError(
+                "FlowerFederatedLoaders requires the 'flwr_datasets' "
+                "package."
+            ) from error
+
         partitioner = getattr(partitioners, self.partitioner_name)
         if self.partitioner_name == "IidPartitioner":
             self.partitioner = partitioner(num_partitions=self.num_clients)
