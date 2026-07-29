@@ -12,7 +12,8 @@ simulation:
   stage_1_end: 150
 
 run_mode:
-  generate_plan: true
+  generate_stage_1_plan: false
+  generate_stage_2_plan: true
   run_baseline_simulation: false
   generate_task_list: false
 
@@ -29,4 +30,7 @@ output:
 
 n_stage_tuning:
   E_K_each_stage: [3]
-  
+
+evaluation:
+  metric: train_loss
+  mode: last_round

@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import hydra
+import csv
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from privacy_accounting.tnb import _solve_gamma_for_conditional_mean, TNBDistribution
@@ -218,6 +219,424 @@ def generate_plan(
     return plan_path
 
 
+def load_stage_1_plan(
+    config,
+    plan_filename="two_stage_tuning_stage_1.JSON",
+):
+    plan_path = (
+        Path(config.output.results_root)
+        / str(config.name)
+        / str(config.run_id)
+        / "plan"
+        / plan_filename
+    )
+
+    if not plan_path.is_file():
+        raise FileNotFoundError(
+            "Stage-1 plan does not exist: "
+            f"{plan_path}"
+        )
+
+    try:
+        with plan_path.open(
+            mode="r",
+            encoding="utf-8",
+        ) as file:
+            plan = json.load(file)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"Stage-1 plan is not valid JSON: {plan_path}"
+        ) from error
+
+    if not isinstance(plan, dict):
+        raise ValueError(
+            "Stage-1 plan must contain a JSON object at its root: "
+            f"{plan_path}"
+        )
+
+    if not isinstance(plan.get("points"), list):
+        raise ValueError(
+            "Stage-1 plan must contain a 'points' list: "
+            f"{plan_path}"
+        )
+
+    if not isinstance(plan.get("execution_summary"), dict):
+        raise ValueError(
+            "Stage-1 plan must contain an "
+            "'execution_summary' object: "
+            f"{plan_path}"
+        )
+
+    return plan
+
+
+def map_stage_1_plan_runs(
+    stage_1_plan,
+    hp_configuration_ids,
+):
+    known_hp_configuration_ids = {
+        str(hp_id)
+        for hp_id in hp_configuration_ids
+    }
+
+    for point_index, point in enumerate(
+        stage_1_plan["points"]
+    ):
+        if not isinstance(point, dict):
+            raise ValueError(
+                "Each Stage-1 plan point must be an object; "
+                f"point {point_index} is invalid."
+            )
+
+        trials = point.get("trials")
+        if not isinstance(trials, list):
+            raise ValueError(
+                "Each Stage-1 plan point must contain a 'trials' "
+                f"list; point {point_index} is invalid."
+            )
+
+        for trial_index, trial in enumerate(trials):
+            if not isinstance(trial, dict):
+                raise ValueError(
+                    "Each Stage-1 trial must be an object; "
+                    f"point {point_index}, trial {trial_index} "
+                    "is invalid."
+                )
+
+            sampled_hp_ids = trial.get(
+                "sampled_hp_configuration_ids"
+            )
+            if not isinstance(sampled_hp_ids, list):
+                raise ValueError(
+                    "Each Stage-1 trial must contain a "
+                    "'sampled_hp_configuration_ids' list; "
+                    f"point {point_index}, trial {trial_index} "
+                    "is invalid."
+                )
+
+            sampled_k = trial.get("sampled_K")
+            if sampled_k != len(sampled_hp_ids):
+                raise ValueError(
+                    "Stage-1 sampled_K does not match the number "
+                    "of sampled hyperparameter configurations at "
+                    f"point {point_index}, trial {trial_index}: "
+                    f"sampled_K={sampled_k!r}, "
+                    f"list length={len(sampled_hp_ids)}."
+                )
+
+            hp_occurrence_counts = Counter()
+            sampled_stage_1_runs = []
+
+            for sample_index, hp_id in enumerate(sampled_hp_ids):
+                hp_id = str(hp_id)
+                if hp_id not in known_hp_configuration_ids:
+                    raise ValueError(
+                        "Unknown hyperparameter configuration "
+                        f"{hp_id!r} at point {point_index}, "
+                        f"trial {trial_index}, sample "
+                        f"{sample_index}."
+                    )
+
+                stage_1_seed = hp_occurrence_counts[hp_id]
+                hp_occurrence_counts[hp_id] += 1
+
+                sampled_stage_1_runs.append(
+                    {
+                        "sample_index": sample_index,
+                        "hp_configuration_id": hp_id,
+                        "stage_1_seed": stage_1_seed,
+                        "stage_1_run_directory": (
+                            f"{hp_id}/seed_{stage_1_seed}"
+                        ),
+                    }
+                )
+
+            trial["sampled_stage_1_runs"] = (
+                sampled_stage_1_runs
+            )
+
+    return stage_1_plan
+
+
+def load_stage_1_metric(
+    csv_path,
+    metric,
+    evaluation_mode,
+    expected_final_round,
+):
+    if not csv_path.is_file():
+        raise FileNotFoundError(
+            f"Stage-1 metrics CSV does not exist: {csv_path}"
+        )
+
+    try:
+        with csv_path.open(
+            mode="r",
+            encoding="utf-8",
+            newline="",
+        ) as file:
+            reader = csv.DictReader(file)
+            fieldnames = reader.fieldnames
+            if fieldnames is None:
+                raise ValueError(
+                    f"Stage-1 metrics CSV has no header: {csv_path}"
+                )
+
+            normalized_columns = {
+                column.strip().lower().replace(" ", "_"): column
+                for column in fieldnames
+            }
+            normalized_metric = (
+                str(metric).strip().lower().replace(" ", "_")
+            )
+
+            try:
+                metric_column = normalized_columns[
+                    normalized_metric
+                ]
+                round_column = normalized_columns["round"]
+            except KeyError as error:
+                available_metrics = ", ".join(fieldnames)
+                raise ValueError(
+                    f"Metric {metric!r} is not available in "
+                    f"{csv_path}. Available columns: "
+                    f"{available_metrics}."
+                ) from error
+
+            metric_rows = []
+            for row_number, row in enumerate(reader, start=2):
+                try:
+                    round_number = int(row[round_column])
+                    score = float(row[metric_column])
+                except (TypeError, ValueError) as error:
+                    raise ValueError(
+                        "Stage-1 metrics CSV contains an invalid "
+                        f"round or score at row {row_number}: "
+                        f"{csv_path}."
+                    ) from error
+
+                if not np.isfinite(score):
+                    raise ValueError(
+                        "Stage-1 metric must be finite at row "
+                        f"{row_number} in {csv_path}; "
+                        f"got {score!r}."
+                    )
+
+                metric_rows.append(
+                    {
+                        "evaluation_round": round_number,
+                        "evaluation_score": score,
+                    }
+                )
+    except OSError as error:
+        raise OSError(
+            f"Could not read Stage-1 metrics CSV: {csv_path}"
+        ) from error
+
+    if not metric_rows:
+        raise ValueError(
+            f"Stage-1 metrics CSV contains no data rows: {csv_path}"
+        )
+
+    final_round = metric_rows[-1]["evaluation_round"]
+    if final_round != expected_final_round:
+        raise ValueError(
+            "Stage-1 metrics CSV does not end at the expected "
+            f"round {expected_final_round}: {csv_path} ends at "
+            f"round {final_round}."
+        )
+
+    normalized_mode = str(evaluation_mode).strip().lower()
+    if normalized_mode == "min":
+        selected_metric = min(
+            metric_rows,
+            key=lambda row: row["evaluation_score"],
+        )
+    elif normalized_mode == "max":
+        selected_metric = max(
+            metric_rows,
+            key=lambda row: row["evaluation_score"],
+        )
+    elif normalized_mode == "last_round":
+        selected_metric = metric_rows[-1]
+    else:
+        raise ValueError(
+            "evaluation.mode must be 'min', 'max', or "
+            f"'last_round'; got {evaluation_mode!r}."
+        )
+
+    return dict(selected_metric)
+
+
+def get_metric_selection_mode(
+    metric,
+    evaluation_mode,
+):
+    normalized_mode = str(evaluation_mode).strip().lower()
+    if normalized_mode in {"min", "max"}:
+        return normalized_mode
+
+    if normalized_mode != "last_round":
+        raise ValueError(
+            "evaluation.mode must be 'min', 'max', or "
+            f"'last_round'; got {evaluation_mode!r}."
+        )
+
+    normalized_metric = (
+        str(metric).strip().lower().replace(" ", "_")
+    )
+    if normalized_metric.endswith("_loss"):
+        return "min"
+    if normalized_metric.endswith(("_accuracy", "_acc")):
+        return "max"
+
+    raise ValueError(
+        "Cannot infer whether a last-round metric should be "
+        f"minimized or maximized from {metric!r}."
+    )
+
+
+def record_stage_1_run_scores(
+    stage_1_plan,
+    config,
+):
+    metric = str(config.evaluation.metric)
+    evaluation_mode = str(config.evaluation.mode)
+    expected_final_round = (
+        int(config.simulation.stage_1_end) - 1
+    )
+    if expected_final_round < 0:
+        raise ValueError(
+            "simulation.stage_1_end must be positive; "
+            f"got {config.simulation.stage_1_end!r}."
+        )
+
+    simulations_root = (
+        Path(config.output.results_root)
+        / str(config.name)
+        / str(config.run_id)
+        / "simulations"
+    )
+    score_cache = {}
+
+    for point in stage_1_plan["points"]:
+        for trial in point["trials"]:
+            for sampled_run in trial["sampled_stage_1_runs"]:
+                run_directory = sampled_run[
+                    "stage_1_run_directory"
+                ]
+                csv_path = (
+                    simulations_root
+                    / run_directory
+                    / "stage_1.csv"
+                )
+
+                if run_directory not in score_cache:
+                    score_cache[run_directory] = (
+                        load_stage_1_metric(
+                            csv_path=csv_path,
+                            metric=metric,
+                            evaluation_mode=evaluation_mode,
+                            expected_final_round=(
+                                expected_final_round
+                            ),
+                        )
+                    )
+
+                sampled_run.update(score_cache[run_directory])
+                sampled_run["evaluation_metric"] = metric
+                sampled_run["evaluation_mode"] = evaluation_mode
+                sampled_run["stage_1_metrics_path"] = str(
+                    csv_path
+                )
+
+    return stage_1_plan
+
+
+def select_top_m_stage_1_runs(
+    stage_1_plan,
+    m,
+    mode,
+    seed,
+):
+    if isinstance(m, bool) or not isinstance(m, (int, np.integer)):
+        raise ValueError(
+            f"top-m must be an integer; got {m!r}."
+        )
+    m = int(m)
+    if m <= 0:
+        raise ValueError(
+            f"top-m must be positive; got {m!r}."
+        )
+
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode not in {"min", "max"}:
+        raise ValueError(
+            "evaluation.mode must be either 'min' or 'max'; "
+            f"got {mode!r}."
+        )
+
+    for point_index, point in enumerate(
+        stage_1_plan["points"]
+    ):
+        for trial_index, trial in enumerate(point["trials"]):
+            sampled_runs = trial["sampled_stage_1_runs"]
+            if len(sampled_runs) < m:
+                raise ValueError(
+                    f"Cannot select top-{m} from only "
+                    f"{len(sampled_runs)} runs at point "
+                    f"{point_index}, trial {trial_index}."
+                )
+
+            trial_id = int(trial.get("trial", trial_index))
+            tie_break_seed = [
+                int(seed),
+                point_index,
+                trial_id,
+            ]
+            rng = np.random.default_rng(
+                np.random.SeedSequence(tie_break_seed)
+            )
+            tie_break_values = rng.random(len(sampled_runs))
+
+            if normalized_mode == "min":
+                score_key = lambda index: (
+                    sampled_runs[index]["evaluation_score"],
+                    tie_break_values[index],
+                )
+            else:
+                score_key = lambda index: (
+                    -sampled_runs[index]["evaluation_score"],
+                    tie_break_values[index],
+                )
+
+            ranked_indices = sorted(
+                range(len(sampled_runs)),
+                key=score_key,
+            )
+
+            top_m_runs = []
+            for rank, sampled_index in enumerate(
+                ranked_indices[:m],
+                start=1,
+            ):
+                selected_run = dict(sampled_runs[sampled_index])
+                selected_run["selection_rank"] = rank
+                top_m_runs.append(selected_run)
+
+            trial["selection_metric"] = str(
+                sampled_runs[0]["evaluation_metric"]
+            )
+            trial["evaluation_mode"] = str(
+                sampled_runs[0]["evaluation_mode"]
+            )
+            trial["selection_mode"] = normalized_mode
+            trial["selection_tie_break_seed"] = tie_break_seed
+            trial["top_m_stage_1_runs"] = top_m_runs
+
+    return stage_1_plan
+
+
 class Papernot_Baseline:
     def __init__(self, config):
         self.config = config
@@ -243,7 +662,7 @@ def utility_compute_plot(config: DictConfig) -> None:
     baseline = Papernot_Baseline(exp_config)
     n_stage_tuning = N_Stage_Method(exp_config)
 
-    if exp_config.run_mode.generate_plan:
+    if exp_config.run_mode.generate_stage_1_plan:
         E_K_values_N_stage = exp_config.base_E_K_list
         local_updates_schedule = exp_config.local_updates_schedule
         fixed_compute = np.zeros_like(E_K_values_N_stage, dtype=float)
@@ -303,6 +722,31 @@ def utility_compute_plot(config: DictConfig) -> None:
                 )
             server.train()
             OmegaConf.save(config, save_path / f"stage_{exp_config.simulation.stage}_config.yaml", resolve=True)
+
+    if exp_config.run_mode.generate_stage_2_plan:
+        stage_1_plan = load_stage_1_plan(exp_config)
+        stage_1_plan = map_stage_1_plan_runs(
+            stage_1_plan,
+            exp_config.hp_configuration_ids,
+        )
+        stage_1_plan = record_stage_1_run_scores(
+            stage_1_plan,
+            exp_config,
+        )
+        stage_1_plan = select_top_m_stage_1_runs(
+            stage_1_plan,
+            m=exp_config.n_stage_tuning.E_K_each_stage[0],
+            mode=get_metric_selection_mode(
+                metric=exp_config.evaluation.metric,
+                evaluation_mode=exp_config.evaluation.mode,
+            ),
+            seed=exp_config.seed,
+        )
+
+
+
+
+
 
 EXPERIMENT_RUNNERS = {
     "utility_compute_plot": utility_compute_plot,
