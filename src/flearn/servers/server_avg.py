@@ -69,8 +69,51 @@ def validate_csv_rounds(
 
 
 class FedAvg(Server):
-    def __init__(self, model, train_data_loader, test_data_loader, num_glob_iters, save_path, loss_fn_name, local_learning_rate, global_learning_rate, weight_decay, use_cuda, similarity, file_name, client_ratio, dp, local_updates, sample_rate, noise_multiplier, max_grad_norm, x_label, y_label, client_sampling_scheme, data_sampling_scheme, stage=None, stage_1_end=None, base_seed=0):
-        super().__init__(model, similarity, save_path, file_name, client_ratio, dp, use_cuda, num_glob_iters, client_sampling_scheme, data_sampling_scheme, stage, stage_1_end, base_seed)
+    def __init__(
+        self,
+        model,
+        train_data_loader,
+        test_data_loader,
+        num_glob_iters,
+        save_path,
+        loss_fn_name,
+        local_learning_rate,
+        global_learning_rate,
+        weight_decay,
+        use_cuda,
+        similarity,
+        file_name,
+        client_ratio,
+        dp,
+        local_updates,
+        sample_rate,
+        noise_multiplier,
+        max_grad_norm,
+        x_label,
+        y_label,
+        client_sampling_scheme,
+        data_sampling_scheme,
+        stage=None,
+        stage_1_end=None,
+        base_seed=0,
+        stage_1_source_path=None,
+    ):
+        super().__init__(
+            model,
+            similarity,
+            save_path,
+            file_name,
+            client_ratio,
+            dp,
+            use_cuda,
+            num_glob_iters,
+            client_sampling_scheme,
+            data_sampling_scheme,
+            stage,
+            stage_1_end,
+            base_seed,
+            stage_1_source_path,
+        )
         self.train_data_loader = train_data_loader
         self.test_data_loader = test_data_loader
         self.global_learning_rate = global_learning_rate
@@ -103,7 +146,7 @@ class FedAvg(Server):
 
         if self.stage == 2:
             stage_1_csv_path = os.path.join(
-                self.save_path,
+                self.stage_1_source_path,
                 "stage_1.csv",
             )
             validate_csv_rounds(

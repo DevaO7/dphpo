@@ -21,7 +21,8 @@ class Server:
         data_sampling_scheme,
         stage=None,
         stage_1_end=None,
-        base_seed=0
+        base_seed=0,
+        stage_1_source_path=None,
     ):
         self.users = []
         self.selected_users = []
@@ -29,6 +30,16 @@ class Server:
         self.save_path = save_path
         self.stage = self._validate_stage(stage)
         self.stage_1_end = self._validate_stage_1_end(stage_1_end)
+        if stage_1_source_path is not None and self.stage != 2:
+            raise ValueError(
+                "stage_1_source_path may only be provided for "
+                "Stage-2 runs."
+            )
+        self.stage_1_source_path = (
+            save_path
+            if stage_1_source_path is None
+            else stage_1_source_path
+        )
         self.model = copy.deepcopy(model)
         self.checkpoint = None
         self.resume_from_checkpoint = False
@@ -159,7 +170,10 @@ class Server:
                 "stage_1_end is required when stage is 2."
             )
 
-        stage_1_path = os.path.join(self.save_path, "stage_1.pt")
+        stage_1_path = os.path.join(
+            self.stage_1_source_path,
+            "stage_1.pt",
+        )
         if not os.path.exists(stage_1_path):
             raise FileNotFoundError(
                 "Cannot start Stage 2 because the Stage 1 checkpoint "

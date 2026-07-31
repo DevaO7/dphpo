@@ -6,31 +6,40 @@ runner: utility_compute_plot
 seed: 1
 
 simulation:
-  run_hp_configuration: H1
-  times: 1
-  stage: 1
-  stage_1_end: 150
+  method: two_stage_tuning
+  run_hp_configuration: H2
+  stage: 2
+  stage_1_end: 75
+  stage_2_end: 150
 
 run_mode:
   generate_stage_1_plan: false
-  generate_stage_2_plan: true
-  run_baseline_simulation: false
-  generate_task_list: false
+  generate_stage_2_plan: false
+  run_simulation_stage_1: false
+  run_simulation_stage_2: false
+  compile_result: true
 
-base_E_K_list: [5, 10, 15]
+base_E_K_list: [5, 7, 10, 15, 20]
 local_updates_schedule: [6, 50]
-num_trials: 5
-run_id: run_id_3
+num_trials: 50
+run_id: run_id_4
 hp_configuration_ids: ["H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10"]
 eta: 0
 
 output:
   results_root: ${paths.results_root}
-  plan_filename: papernot_baseline.JSON
 
 n_stage_tuning:
   E_K_each_stage: [3]
 
 evaluation:
-  metric: train_loss
-  mode: last_round
+  selection:
+    metric: train_loss
+    mode: min
+  utility:
+    metrics:
+      - train_loss
+      - train_accuracy
+      - test_loss
+      - test_accuracy
+    at: selection_round
