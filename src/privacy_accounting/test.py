@@ -1,9 +1,12 @@
 import numpy as np
 import math
 from matplotlib import pyplot as plt
-from dpfedavg import compute_dpfedavg_rdp
-from rdp_utils import convert_rdp_to_approx_dp, compose_rdp_curves
-from selection_accounting import (
+from privacy_accounting.dpfedavg import compute_dpfedavg_rdp
+from privacy_accounting.rdp_utils import (
+    compose_rdp_curves,
+    convert_rdp_to_approx_dp,
+)
+from privacy_accounting.selection_accounting import (
     compute_top1_rdp,
     compute_top_m_rdp,
     compute_two_stage_rdp,

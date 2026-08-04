@@ -36,7 +36,7 @@ from typing import Any, Literal, Mapping
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from rdp_utils import (
+from .rdp_utils import (
     RdpCurve,
     apply_renyi_monotonicity_envelope,
     log1mexp,

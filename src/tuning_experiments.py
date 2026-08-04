@@ -12,6 +12,13 @@ from collections import Counter
 from utils.data_utils import get_data_loaders, set_seed
 from flearn.trainmodel import models
 from flearn.servers.server_avg import FedAvg
+from privacy_accounting.dpfedavg import compute_dpfedavg_rdp
+from privacy_accounting.rdp_utils import convert_rdp_to_approx_dp, compose_rdp_curves
+from privacy_accounting.selection_accounting import (
+    compute_top1_rdp,
+    compute_top_m_rdp,
+    compute_two_stage_rdp,
+)
 
 
 PLAN_FILENAMES = {
@@ -2695,32 +2702,432 @@ def compile_experiment_results(config):
         "plot_paths": plot_paths,
     }
 
-
-class Papernot_Baseline:
-    def __init__(self, config):
-        self.config = config
-
-    def calculate_E_K_given_compute(self, compute, local_updates_schedule):
-        E_K = compute/sum(local_updates_schedule)
-        return E_K
+def calculate_E_K_given_compute_for_papernot(compute, local_updates_schedule):
+    E_K = compute/sum(local_updates_schedule)
+    return E_K
 
 
-class N_Stage_Method:
-    def __init__(self, config):
-        self.config = config.n_stage_tuning
+def calculate_compute_given_E_K_two_stage_tuning(config, E_K, local_updates_schedule):
+    E_K_each_stage = [E_K] + config.n_stage_tuning.E_K_each_stage
+    compute = 0
+    for i, E_K in enumerate(E_K_each_stage):
+        compute += E_K * local_updates_schedule[i]
+    return compute
 
-    def calculate_compute_given_E_K(self, E_K, local_updates_schedule):
-        E_K_each_stage = [E_K] + self.config.E_K_each_stage
-        compute = 0
-        for i, E_K in enumerate(E_K_each_stage):
-            compute += E_K * local_updates_schedule[i]
-        return compute
 
+def load_privacy_compute_points(config):
+    paths = get_compilation_paths(config)
+    stage_compute_schedule = get_stage_compute_schedule(config)
+    compiled_results = {}
+
+    for method, filename in RESULT_FILENAMES.items():
+        result_path = paths["compiled_root"] / filename
+        if not result_path.is_file():
+            raise FileNotFoundError(
+                "Compiled results are required before privacy "
+                f"accounting: {result_path}"
+            )
+        try:
+            with result_path.open(
+                mode="r",
+                encoding="utf-8",
+            ) as file:
+                result = json.load(file)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Compiled results are not valid JSON: {result_path}"
+            ) from error
+        if result.get("method") != method:
+            raise ValueError(
+                f"Compiled result {result_path} has method "
+                f"{result.get('method')!r}, expected {method!r}."
+            )
+        compiled_results[method] = result
+
+    papernot_result = compiled_results["papernot_baseline"]
+    two_stage_result = compiled_results["two_stage_tuning"]
+    papernot_points = []
+    for point_index, point in enumerate(
+        papernot_result["points"]
+    ):
+        expected_num_trials = float(point["E_K"])
+        expected_compute = float(point["expected_compute"])
+        calculated_compute = (
+            expected_num_trials * sum(stage_compute_schedule)
+        )
+        if not np.isclose(
+            expected_compute,
+            calculated_compute,
+            rtol=1e-12,
+            atol=1e-9,
+        ):
+            raise ValueError(
+                "Papernot compiled expected compute is inconsistent "
+                f"at point {point_index}: stored={expected_compute}, "
+                f"calculated={calculated_compute}."
+            )
+        papernot_points.append(
+            {
+                "point_index": point_index,
+                "expected_compute": expected_compute,
+                "expected_num_trials": expected_num_trials,
+            }
+        )
+
+    two_stage_points = []
+    for point_index, point in enumerate(
+        two_stage_result["points"]
+    ):
+        stage_1_expected_num_trials = float(
+            point["stage_1_E_K"]
+        )
+        stage_2_expected_num_trials = float(
+            point["stage_2_E_K"]
+        )
+        expected_compute = float(point["expected_compute"])
+        calculated_compute = (
+            stage_1_expected_num_trials
+            * stage_compute_schedule[0]
+            + stage_2_expected_num_trials
+            * stage_compute_schedule[1]
+        )
+        if not np.isclose(
+            expected_compute,
+            calculated_compute,
+            rtol=1e-12,
+            atol=1e-9,
+        ):
+            raise ValueError(
+                "Two-stage compiled expected compute is "
+                f"inconsistent at point {point_index}: "
+                f"stored={expected_compute}, "
+                f"calculated={calculated_compute}."
+            )
+        two_stage_points.append(
+            {
+                "point_index": point_index,
+                "expected_compute": expected_compute,
+                "stage_1_expected_num_trials": (
+                    stage_1_expected_num_trials
+                ),
+                "stage_2_expected_num_trials": (
+                    stage_2_expected_num_trials
+                ),
+            }
+        )
+
+    papernot_points.sort(
+        key=lambda point: point["expected_compute"]
+    )
+    two_stage_points.sort(
+        key=lambda point: point["expected_compute"]
+    )
+    papernot_compute = np.asarray(
+        [point["expected_compute"] for point in papernot_points]
+    )
+    two_stage_compute = np.asarray(
+        [point["expected_compute"] for point in two_stage_points]
+    )
+    if (
+        papernot_compute.shape != two_stage_compute.shape
+        or not np.allclose(
+            papernot_compute,
+            two_stage_compute,
+            rtol=1e-12,
+            atol=1e-9,
+        )
+    ):
+        raise ValueError(
+            "Papernot and two-stage compiled results do not use "
+            "matching expected-compute coordinates."
+        )
+
+    return {
+        "papernot_points": papernot_points,
+        "two_stage_points": two_stage_points,
+        "papernot_eta": float(papernot_result["eta"]),
+        "two_stage_eta": float(two_stage_result["eta"]),
+        "two_stage_top_m": int(
+            two_stage_result["stage_1_top_m"]
+        ),
+    }
+
+
+def validate_privacy_order_search(dp_result, method, expected_compute):
+    if dp_result.is_at_min_order or dp_result.is_at_max_order:
+        boundary = (
+            "minimum"
+            if dp_result.is_at_min_order
+            else "maximum"
+        )
+        raise RuntimeError(
+            f"The optimal Rényi order for {method} at expected "
+            f"compute {expected_compute} is the {boundary} stored "
+            f"order ({dp_result.best_order}). Expand the configured "
+            "Rényi-order range before reporting epsilon."
+        )
+
+
+def save_privacy_compute_rows(rows, csv_path):
+    if not rows:
+        raise ValueError("No privacy-compute result rows were produced.")
+    with csv_path.open(
+        mode="w",
+        encoding="utf-8",
+        newline="",
+    ) as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=list(rows[0]),
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def plot_privacy_compute_plot(config):
+    exp_config = config.experiment
+    privacy_config = exp_config.privacy
+    max_renyi_order = int(privacy_config.max_renyi_order)
+    if max_renyi_order < 3:
+        raise ValueError(
+            "privacy.max_renyi_order must be at least 3."
+        )
+    orders = np.arange(2, max_renyi_order + 1)
+    delta = float(privacy_config.delta)
+    if not 0.0 < delta < 1.0:
+        raise ValueError(
+            f"privacy.delta must satisfy 0 < delta < 1; got {delta}."
+        )
+    accounting_method = str(
+        privacy_config.accounting_method
+    ).strip().lower()
+    if accounting_method not in {"bounds", "numerical"}:
+        raise ValueError(
+            "privacy.accounting_method must be 'bounds' or "
+            f"'numerical'; got {accounting_method!r}."
+        )
+
+    low_resource_config = {
+        "num_rounds": int(exp_config.simulation.stage_1_end),
+        "num_local_updates": int(
+            exp_config.local_updates_schedule[0]
+        ),
+        "num_clients": int(config.dataset.nb_users),
+        "client_sampling_rate": float(config.server.client_ratio),
+        "local_sampling_rate": float(config.server.sampling_rate),
+        "sigma_gaussian": float(config.server.sigma),
+        "sigma_is_actual": False,
+    }
+    high_resource_config = {
+        "num_rounds": int(
+            exp_config.simulation.stage_2_end
+            - exp_config.simulation.stage_1_end
+        ),
+        "num_local_updates": int(
+            exp_config.local_updates_schedule[1]
+        ),
+        "num_clients": int(config.dataset.nb_users),
+        "client_sampling_rate": float(config.server.client_ratio),
+        "local_sampling_rate": float(config.server.sampling_rate),
+        "sigma_gaussian": float(config.server.sigma),
+        "sigma_is_actual": False,
+    }
+    low_resource_curve = compute_dpfedavg_rdp(
+        config=low_resource_config,
+        orders=orders,
+        accounting_method=accounting_method,
+    )
+    high_resource_curve = compute_dpfedavg_rdp(
+        config=high_resource_config,
+        orders=orders,
+        accounting_method=accounting_method,
+    )
+    papernot_base_curve = compose_rdp_curves(
+        low_resource_curve,
+        high_resource_curve,
+    )
+    accounting_metadata = {
+        "stage_1_num_rounds": low_resource_config[
+            "num_rounds"
+        ],
+        "stage_2_num_rounds": high_resource_config[
+            "num_rounds"
+        ],
+        "stage_1_num_local_updates": low_resource_config[
+            "num_local_updates"
+        ],
+        "stage_2_num_local_updates": high_resource_config[
+            "num_local_updates"
+        ],
+        "num_clients": low_resource_config["num_clients"],
+        "client_sampling_rate": low_resource_config[
+            "client_sampling_rate"
+        ],
+        "local_sampling_rate": low_resource_config[
+            "local_sampling_rate"
+        ],
+        "sigma_gaussian": low_resource_config[
+            "sigma_gaussian"
+        ],
+        "sigma_is_actual": low_resource_config[
+            "sigma_is_actual"
+        ],
+        "effective_gaussian_noise_multiplier": (
+            low_resource_config["sigma_gaussian"]
+            * np.sqrt(
+                low_resource_config["client_sampling_rate"]
+                * low_resource_config["num_clients"]
+            )
+        ),
+        "client_sampling_scheme": str(
+            config.server.client_sampling_scheme
+        ),
+        "data_sampling_scheme": str(
+            config.server.data_sampling_scheme
+        ),
+    }
+
+    privacy_points = load_privacy_compute_points(exp_config)
+    privacy_rows = []
+    for point in privacy_points["papernot_points"]:
+        selection_result = compute_top1_rdp(
+            base_rdp_curve=papernot_base_curve,
+            expected_num_trials=point["expected_num_trials"],
+            eta=privacy_points["papernot_eta"],
+        )
+        dp_result = convert_rdp_to_approx_dp(
+            selection_result.rdp_curve,
+            delta=delta,
+        )
+        validate_privacy_order_search(
+            dp_result=dp_result,
+            method="papernot_baseline",
+            expected_compute=point["expected_compute"],
+        )
+        privacy_rows.append(
+            {
+                "method": "papernot_baseline",
+                "point_index": point["point_index"],
+                "expected_compute": point["expected_compute"],
+                "expected_num_trials": point[
+                    "expected_num_trials"
+                ],
+                "stage_1_expected_num_trials": "",
+                "stage_2_expected_num_trials": "",
+                "top_m": 1,
+                "eta": privacy_points["papernot_eta"],
+                "epsilon": dp_result.epsilon,
+                "delta": dp_result.delta,
+                "best_renyi_order": dp_result.best_order,
+                "is_at_min_order": dp_result.is_at_min_order,
+                "is_at_max_order": dp_result.is_at_max_order,
+                "min_renyi_order": int(orders[0]),
+                "max_renyi_order": int(orders[-1]),
+                "accounting_method": accounting_method,
+                **accounting_metadata,
+            }
+        )
+
+    for point in privacy_points["two_stage_points"]:
+        selection_result = compute_two_stage_rdp(
+            stage_1_base_rdp_curve=low_resource_curve,
+            stage_2_base_rdp_curve=high_resource_curve,
+            m=privacy_points["two_stage_top_m"],
+            expected_num_trials_stage_1=point[
+                "stage_1_expected_num_trials"
+            ],
+            expected_num_trials_stage_2=point[
+                "stage_2_expected_num_trials"
+            ],
+            eta_stage_1=privacy_points["two_stage_eta"],
+            eta_stage_2=privacy_points["two_stage_eta"],
+        )
+        dp_result = convert_rdp_to_approx_dp(
+            selection_result.rdp_curve,
+            delta=delta,
+        )
+        validate_privacy_order_search(
+            dp_result=dp_result,
+            method="two_stage_tuning",
+            expected_compute=point["expected_compute"],
+        )
+        privacy_rows.append(
+            {
+                "method": "two_stage_tuning",
+                "point_index": point["point_index"],
+                "expected_compute": point["expected_compute"],
+                "expected_num_trials": "",
+                "stage_1_expected_num_trials": point[
+                    "stage_1_expected_num_trials"
+                ],
+                "stage_2_expected_num_trials": point[
+                    "stage_2_expected_num_trials"
+                ],
+                "top_m": privacy_points["two_stage_top_m"],
+                "eta": privacy_points["two_stage_eta"],
+                "epsilon": dp_result.epsilon,
+                "delta": dp_result.delta,
+                "best_renyi_order": dp_result.best_order,
+                "is_at_min_order": dp_result.is_at_min_order,
+                "is_at_max_order": dp_result.is_at_max_order,
+                "min_renyi_order": int(orders[0]),
+                "max_renyi_order": int(orders[-1]),
+                "accounting_method": accounting_method,
+                **accounting_metadata,
+            }
+        )
+
+    paths = get_compilation_paths(exp_config)
+    compiled_root = paths["compiled_root"]
+    compiled_root.mkdir(parents=True, exist_ok=True)
+    csv_path = compiled_root / "privacy_compute_results.csv"
+    save_privacy_compute_rows(
+        rows=privacy_rows,
+        csv_path=csv_path,
+    )
+
+    method_labels = {
+        "papernot_baseline": "Papernot baseline",
+        "two_stage_tuning": "Two-stage tuning",
+    }
+    figure, axis = plt.subplots(figsize=(10, 5))
+    for method in RESULT_FILENAMES:
+        method_rows = sorted(
+            (
+                row
+                for row in privacy_rows
+                if row["method"] == method
+            ),
+            key=lambda row: row["expected_compute"],
+        )
+        axis.plot(
+            [row["expected_compute"] for row in method_rows],
+            [row["epsilon"] for row in method_rows],
+            label=method_labels[method],
+            marker="o",
+        )
+
+    axis.set_xlabel(
+        "Expected compute (communication rounds × local updates)"
+    )
+    axis.set_ylabel(
+        rf"$\varepsilon$ at $\delta={delta:.1e}$"
+    )
+    axis.set_title("Privacy-Compute Tradeoff")
+    axis.legend()
+    axis.grid(alpha=0.25)
+    figure.tight_layout()
+    plot_path = compiled_root / "expected_compute_vs_privacy.png"
+    figure.savefig(plot_path, dpi=300)
+    plt.close(figure)
+
+    return {
+        "privacy_csv_path": csv_path,
+        "plot_path": plot_path,
+    }
 
 def utility_compute_plot(config: DictConfig) -> None:
     exp_config = config.experiment
-    baseline = Papernot_Baseline(exp_config)
-    n_stage_tuning = N_Stage_Method(exp_config)
 
     if exp_config.run_mode.generate_stage_1_plan:
         E_K_values_N_stage = exp_config.base_E_K_list
@@ -2730,8 +3137,8 @@ def utility_compute_plot(config: DictConfig) -> None:
         fixed_compute = np.zeros_like(E_K_values_N_stage, dtype=float)
         E_K_values_papernot_baseline = np.zeros_like(E_K_values_N_stage, dtype=float)
         for i, E_K in enumerate(E_K_values_N_stage):
-            fixed_compute[i] = n_stage_tuning.calculate_compute_given_E_K(E_K, stage_compute_schedule)
-            E_K_values_papernot_baseline[i] = baseline.calculate_E_K_given_compute(fixed_compute[i], stage_compute_schedule)
+            fixed_compute[i] = calculate_compute_given_E_K_two_stage_tuning(exp_config, E_K, stage_compute_schedule)
+            E_K_values_papernot_baseline[i] = calculate_E_K_given_compute_for_papernot(fixed_compute[i], stage_compute_schedule)
         generate_plan(
             exp_config,
             "papernot_baseline",
@@ -2791,6 +3198,7 @@ def utility_compute_plot(config: DictConfig) -> None:
 
     if exp_config.run_mode.compile_result:
         compile_experiment_results(exp_config)
+        plot_privacy_compute_plot(config)
 
 EXPERIMENT_RUNNERS = {
     "utility_compute_plot": utility_compute_plot,

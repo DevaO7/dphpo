@@ -37,12 +37,12 @@ from typing import Optional
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from rdp_utils import (
+from .rdp_utils import (
     RdpCurve,
     apply_renyi_monotonicity_envelope,
     compose_rdp_curves,
 )
-from tnb import TNBDistribution
+from .tnb import TNBDistribution
 
 
 FloatArray = NDArray[np.float64]

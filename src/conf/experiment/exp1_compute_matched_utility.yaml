@@ -32,6 +32,11 @@ output:
 n_stage_tuning:
   E_K_each_stage: [3]
 
+privacy:
+  delta: 1e-5
+  max_renyi_order: 100
+  accounting_method: numerical
+
 evaluation:
   selection:
     metric: train_loss
