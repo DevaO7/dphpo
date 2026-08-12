@@ -1,6 +1,7 @@
 from flearn.trainmodel import models
 from flearn.servers.server_avg import FedAvg
-from utils.data_utils import get_data_loaders, visualize_partition, set_seed
+from utils.data_utils import get_data_loaders, visualize_partition
+from utils.seed_utils import set_global_seed
 from utils.tuning_utils import perform_early_stopping_analysis, perform_simple_cross_validation_analysis, load_results
 import torch
 import numpy as np
@@ -73,7 +74,7 @@ def compile_tuning_results(cfg):
 
 
 def tune_hyperparameters(cfg):
-    set_seed(cfg.run_settings.seed)
+    set_global_seed(cfg.run_settings.seed)
     if cfg.dataset.name == 'synthetic':
         model = getattr(models, cfg.dataset.model_name)(input_dim=cfg.dataset.dim_input, output_dim=cfg.dataset.dim_output)
     else:
@@ -146,4 +147,3 @@ def tune_hyperparameters(cfg):
                 server.train()
     else:
         pass
-

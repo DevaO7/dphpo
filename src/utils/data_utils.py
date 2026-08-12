@@ -11,25 +11,6 @@ from torchvision.transforms import ToTensor
 import matplotlib.pyplot as plt
 import numpy as np
 from data.synthetic.data_generator import generate_synthetic as generate_synthetic_dataset
-import random
-
-def set_seed(seed=42):
-    # 1. Python & NumPy
-    random.seed(seed)
-    np.random.seed(seed)
-    
-    # 2. PyTorch (CPU)
-    torch.manual_seed(seed)
-    
-    # 3. PyTorch (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed) # for multi-GPU
-    
-    # 4. Force Deterministic Algorithms
-    # Warning: This can slow down training slightly
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 
 @dataclass

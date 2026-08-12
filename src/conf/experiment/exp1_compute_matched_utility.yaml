@@ -1,4 +1,5 @@
 # src/conf/experiment/exp1_compute_matched_utility.yaml
+# We control the resources through number of local updates
 
 name: exp1_compute_matched_utility
 
@@ -29,8 +30,11 @@ eta: 0
 output:
   results_root: ${paths.results_root}
 
-n_stage_tuning:
-  E_K_each_stage: [3]
+two_stage:
+  # Number of Stage-1 model/HP pairs released for refinement.
+  num_survivors: 3
+  # Mean of the Stage-2 top-1 TNB trial-count distribution.
+  stage_2_expected_trials: 3
 
 privacy:
   delta: 1e-5

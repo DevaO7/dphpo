@@ -1,7 +1,31 @@
 import numpy as np
+import random
+import torch
 
 
 DP_NOISE_STREAM = 1
+
+
+def set_global_seed(seed: int = 42) -> None:
+    """Seed process-wide RNGs and request deterministic cuDNN behavior."""
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError(
+            "The global seed must be a non-negative integer; "
+            f"got {seed!r}."
+        )
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    # These flags improve cuDNN reproducibility. They do not make every
+    # PyTorch operation deterministic; individual algorithms and data-loader
+    # workers may still require their own deterministic configuration.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def derive_seed(

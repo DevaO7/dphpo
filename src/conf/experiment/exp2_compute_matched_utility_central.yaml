@@ -1,0 +1,61 @@
+
+
+name: exp1_compute_matched_utility_central
+
+runner: utility_compute_plot
+seed: 1
+
+simulation:
+  method: two_stage_tuning
+  run_hp_configuration: H2
+  stage: 1
+  stage_1_end: 75
+  stage_2_end: 150
+
+run_mode:
+  generate_stage_1_plan: false
+  generate_stage_2_plan: false
+  run_simulation_stage_1: true
+  run_simulation_stage_2: false
+  compile_result: false
+
+base_E_K_list: [5, 7, 10, 15, 20]
+num_trials: 10
+run_id: run_id_5
+hp_configuration_ids: ["H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10"]
+eta: 0
+
+two_stage:
+  num_survivors: 3
+  stage_2_expected_trials: 3
+
+output:
+  results_root: ${paths.results_root}
+
+dataset:
+  name: synthetic
+  batch_size: 32
+  root: data/central
+  download: true
+  num_workers: 0
+  pin_memory: false
+  shuffle_train: true
+  drop_last_train: false
+
+  # Used only when name: synthetic.
+  num_samples: 10000
+  input_dim: 60
+  num_classes: 10
+  train_fraction: 0.8
+  alpha: 0.0
+  beta: 0.0
+  iid: true
+  cluster_seed: 0
+  data_seed: 0
+  split_seed: 0
+
+  # Used only when name: imdb.
+  dataset_id: stanfordnlp/imdb
+  vocabulary_size: 20000
+  minimum_token_frequency: 1
+  maximum_sequence_length: 256

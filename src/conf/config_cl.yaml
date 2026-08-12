@@ -1,0 +1,16 @@
+defaults:
+  - experiment: exp2_compute_matched_utility_central
+  - hp_candidate_set: synthetic_learning_rate
+  - _self_
+
+paths:
+  results_root: results_central
+
+hydra:
+  run:
+    dir: ${paths.results_root}/${experiment.name}/${experiment.run_id}
+  job:
+    chdir: false
+
+run_settings:
+  rounds: 75 # Needs to match stage 1 or stage 2 end

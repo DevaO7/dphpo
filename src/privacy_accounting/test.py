@@ -5,6 +5,7 @@ from privacy_accounting.dpfedavg import compute_dpfedavg_rdp
 from privacy_accounting.rdp_utils import (
     compose_rdp_curves,
     convert_rdp_to_approx_dp,
+    RdpCurve
 )
 from privacy_accounting.selection_accounting import (
     compute_top1_rdp,
@@ -349,6 +350,22 @@ def matched_search_breadth_plot():
     plt.tight_layout()
     plt.savefig("compute_matched_search_breadth.png", dpi=300)
 
+def compare_with_peeling_plot():
+    orders = np.arange(2, 101)
+
+    # base mechanism
+    base_mechanism = RdpCurve(
+        orders=orders,
+        epsilons=0.1 * np.ones_like(orders),
+    )
+    print('works')
+
+    # papernot top-1
+
+    # m times papernot top-1
+
+    # top-m
+
 
 if __name__== "__main__":
-    matched_search_breadth_plot()
+    compare_with_peeling_plot()
