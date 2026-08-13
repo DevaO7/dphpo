@@ -31,7 +31,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from numbers import Integral
 from typing import Optional
 
 import numpy as np
@@ -43,32 +42,10 @@ from .rdp_utils import (
     compose_rdp_curves,
 )
 from .tnb import TNBDistribution
+from .validation import validate_eta, validate_positive_integer
 
 
 FloatArray = NDArray[np.float64]
-
-
-def _validate_positive_integer(value: int, name: str) -> int:
-    if not isinstance(value, Integral):
-        raise TypeError(f"{name} must be an integer.")
-
-    value = int(value)
-
-    if value < 1:
-        raise ValueError(f"{name} must be at least 1.")
-
-    return value
-
-
-def _validate_eta(eta: float) -> float:
-    eta = float(eta)
-
-    if not math.isfinite(eta):
-        raise ValueError("eta must be finite.")
-    if eta <= -1.0:
-        raise ValueError("eta must satisfy eta > -1.")
-
-    return eta
 
 
 def _validate_expected_num_trials(
@@ -379,8 +356,8 @@ def compute_top_m_rdp(
             "base_rdp_curve must be an RdpCurve."
         )
 
-    m = _validate_positive_integer(m, "m")
-    eta = _validate_eta(eta)
+    m = validate_positive_integer(m, "m")
+    eta = validate_eta(eta)
     expected_num_trials = _validate_expected_num_trials(
         expected_num_trials,
         m=m,
@@ -517,7 +494,7 @@ def compute_two_stage_rdp(
         Whether to improve each stage curve and the composed curve using
         Rényi-order monotonicity.
     """
-    m = _validate_positive_integer(m, "m")
+    m = validate_positive_integer(m, "m")
 
     if m <= 1:
         raise ValueError(

@@ -50,7 +50,7 @@ def get_two_stage_settings(config) -> TwoStageSettings:
     if isinstance(raw_stage_2_expected_trials, bool):
         raise ValueError(
             "two_stage.stage_2_expected_trials must be finite and "
-            "at least 1; got "
+            "greater than 1; got "
             f"{raw_stage_2_expected_trials!r}."
         )
     try:
@@ -60,16 +60,16 @@ def get_two_stage_settings(config) -> TwoStageSettings:
     except (TypeError, ValueError, OverflowError) as error:
         raise ValueError(
             "two_stage.stage_2_expected_trials must be finite and "
-            "at least 1; got "
+            "greater than 1; got "
             f"{raw_stage_2_expected_trials!r}."
         ) from error
     if (
         not math.isfinite(stage_2_expected_trials)
-        or stage_2_expected_trials < 1
+        or stage_2_expected_trials <= 1
     ):
         raise ValueError(
             "two_stage.stage_2_expected_trials must be finite and "
-            "at least 1; got "
+            "greater than 1; got "
             f"{raw_stage_2_expected_trials!r}."
         )
 

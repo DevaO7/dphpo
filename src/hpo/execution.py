@@ -38,17 +38,24 @@ def save_run_spec(save_path, stage, run_spec):
                 f"the selected plan: {spec_path}. Use a new run_id "
                 "or restore the plan that created this run."
             )
+        return spec_path
 
-    with spec_path.open(
-        mode="w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            run_spec,
-            file,
-            indent=4,
-            allow_nan=False,
-        )
+    temporary_path = spec_path.with_suffix(".JSON.tmp")
+    try:
+        with temporary_path.open(
+            mode="w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                run_spec,
+                file,
+                indent=4,
+                allow_nan=False,
+            )
+        temporary_path.replace(spec_path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
 
     return spec_path
 

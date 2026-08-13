@@ -28,6 +28,70 @@ from numpy.typing import ArrayLike, NDArray
 FloatArray = NDArray[np.float64]
 
 
+def gaussian_rdp(
+    order: float,
+    noise_multiplier: float,
+) -> float:
+    """Return the RDP epsilon of a Gaussian mechanism at one order.
+
+    ``noise_multiplier`` is the Gaussian noise standard deviation divided
+    by the mechanism's sensitivity.
+    """
+    order = float(order)
+    noise_multiplier = float(noise_multiplier)
+
+    if not math.isfinite(order) or order <= 1.0:
+        raise ValueError("order must be finite and greater than 1.")
+    if not math.isfinite(noise_multiplier) or noise_multiplier <= 0.0:
+        raise ValueError(
+            "noise_multiplier must be finite and strictly positive."
+        )
+
+    return order / (2.0 * noise_multiplier**2)
+
+
+def normalize_requested_integer_orders(
+    orders: ArrayLike,
+) -> NDArray[np.int64]:
+    """Validate and return a strictly increasing integer Rényi-order grid.
+
+    Accountants using this helper may evaluate every integer order from 2
+    through the largest requested order internally, so sparse requested
+    order sets are allowed.
+    """
+    orders_array = np.asarray(orders, dtype=float)
+
+    if orders_array.ndim != 1:
+        raise ValueError("orders must be one-dimensional.")
+    if orders_array.size == 0:
+        raise ValueError("orders must contain at least one order.")
+    if not np.all(np.isfinite(orders_array)):
+        raise ValueError("orders must contain only finite values.")
+    if np.any(orders_array <= 1.0):
+        raise ValueError(
+            "Every requested Rényi order must be greater than 1."
+        )
+    if not np.all(
+        np.isclose(
+            orders_array,
+            np.rint(orders_array),
+            rtol=0.0,
+            atol=1e-12,
+        )
+    ):
+        raise ValueError(
+            "This accounting method supports integer Rényi orders only."
+        )
+
+    integer_orders = np.rint(orders_array).astype(np.int64)
+    if np.any(np.diff(integer_orders) <= 0):
+        raise ValueError(
+            "Requested Rényi orders must be strictly increasing."
+        )
+
+    return integer_orders
+
+
 def _as_readonly_float_array(
     values: ArrayLike,
     *,

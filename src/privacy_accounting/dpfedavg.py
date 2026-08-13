@@ -30,90 +30,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from numbers import Integral
 from typing import Any, Literal, Mapping
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from .config_utils import extract_mapping_value
 from .rdp_utils import (
     RdpCurve,
     apply_renyi_monotonicity_envelope,
+    gaussian_rdp,
     log1mexp,
+    normalize_requested_integer_orders,
+)
+from .validation import (
+    validate_positive_float,
+    validate_positive_integer,
+    validate_probability,
 )
 
 
 AccountingMethod = Literal["bounds", "numerical"]
 FloatArray = NDArray[np.float64]
-
-
-def _validate_positive_integer(value: int, name: str) -> int:
-    if not isinstance(value, Integral):
-        raise TypeError(f"{name} must be an integer.")
-
-    value = int(value)
-
-    if value < 1:
-        raise ValueError(f"{name} must be at least 1.")
-
-    return value
-
-
-def _validate_probability(value: float, name: str) -> float:
-    value = float(value)
-
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be finite.")
-    if not 0.0 < value <= 1.0:
-        raise ValueError(f"{name} must satisfy 0 < {name} <= 1.")
-
-    return value
-
-
-def _validate_positive_float(value: float, name: str) -> float:
-    value = float(value)
-
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be finite.")
-    if value <= 0.0:
-        raise ValueError(f"{name} must be positive.")
-
-    return value
-
-
-def _extract_mapping_value(
-    mapping: Mapping[str, Any],
-    *,
-    canonical_name: str,
-    aliases: tuple[str, ...],
-) -> Any:
-    """
-    Extract one configuration value while supporting legacy aliases.
-    """
-    present = [
-        key
-        for key in (canonical_name, *aliases)
-        if key in mapping
-    ]
-
-    if not present:
-        accepted = ", ".join((canonical_name, *aliases))
-        raise KeyError(
-            f"Missing configuration value for {canonical_name!r}. "
-            f"Accepted keys: {accepted}."
-        )
-
-    value = mapping[present[0]]
-
-    for key in present[1:]:
-        other_value = mapping[key]
-        if other_value != value:
-            raise ValueError(
-                f"Conflicting values were supplied for {canonical_name!r}: "
-                f"{present[0]}={value!r}, {key}={other_value!r}."
-            )
-
-    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +102,7 @@ class DPFedAvgConfig:
         object.__setattr__(
             self,
             "num_rounds",
-            _validate_positive_integer(
+            validate_positive_integer(
                 self.num_rounds,
                 "num_rounds",
             ),
@@ -172,7 +110,7 @@ class DPFedAvgConfig:
         object.__setattr__(
             self,
             "num_local_updates",
-            _validate_positive_integer(
+            validate_positive_integer(
                 self.num_local_updates,
                 "num_local_updates",
             ),
@@ -180,7 +118,7 @@ class DPFedAvgConfig:
         object.__setattr__(
             self,
             "num_clients",
-            _validate_positive_integer(
+            validate_positive_integer(
                 self.num_clients,
                 "num_clients",
             ),
@@ -188,7 +126,7 @@ class DPFedAvgConfig:
         object.__setattr__(
             self,
             "client_sampling_rate",
-            _validate_probability(
+            validate_probability(
                 self.client_sampling_rate,
                 "client_sampling_rate",
             ),
@@ -196,7 +134,7 @@ class DPFedAvgConfig:
         object.__setattr__(
             self,
             "local_sampling_rate",
-            _validate_probability(
+            validate_probability(
                 self.local_sampling_rate,
                 "local_sampling_rate",
             ),
@@ -204,7 +142,7 @@ class DPFedAvgConfig:
         object.__setattr__(
             self,
             "sigma_gaussian",
-            _validate_positive_float(
+            validate_positive_float(
                 self.sigma_gaussian,
                 "sigma_gaussian",
             ),
@@ -237,32 +175,32 @@ class DPFedAvgConfig:
         affect the RDP curve of one training run.
         """
         return cls(
-            num_rounds=_extract_mapping_value(
+            num_rounds=extract_mapping_value(
                 config,
                 canonical_name="num_rounds",
                 aliases=("T",),
             ),
-            num_local_updates=_extract_mapping_value(
+            num_local_updates=extract_mapping_value(
                 config,
                 canonical_name="num_local_updates",
                 aliases=("K",),
             ),
-            num_clients=_extract_mapping_value(
+            num_clients=extract_mapping_value(
                 config,
                 canonical_name="num_clients",
                 aliases=("M",),
             ),
-            client_sampling_rate=_extract_mapping_value(
+            client_sampling_rate=extract_mapping_value(
                 config,
                 canonical_name="client_sampling_rate",
                 aliases=("l", "ell"),
             ),
-            local_sampling_rate=_extract_mapping_value(
+            local_sampling_rate=extract_mapping_value(
                 config,
                 canonical_name="local_sampling_rate",
                 aliases=("s",),
             ),
-            sigma_gaussian=_extract_mapping_value(
+            sigma_gaussian=extract_mapping_value(
                 config,
                 canonical_name="sigma_gaussian",
                 aliases=("noise_multiplier",),
@@ -322,50 +260,6 @@ def _normalize_accounting_method(
     return aliases[normalized]  # type: ignore[return-value]
 
 
-def _normalize_requested_integer_orders(
-    orders: ArrayLike,
-) -> NDArray[np.int64]:
-    """
-    Validate requested integer Rényi orders.
-
-    The accountant internally evaluates every integer order from 2 through
-    the largest requested order, so sparse requested order sets are allowed.
-    """
-    orders_array = np.asarray(orders, dtype=float)
-
-    if orders_array.ndim != 1:
-        raise ValueError("orders must be one-dimensional.")
-    if orders_array.size == 0:
-        raise ValueError("orders must contain at least one order.")
-    if not np.all(np.isfinite(orders_array)):
-        raise ValueError("orders must contain only finite values.")
-    if np.any(orders_array <= 1.0):
-        raise ValueError(
-            "Every requested Rényi order must be greater than 1."
-        )
-    if not np.all(
-        np.isclose(
-            orders_array,
-            np.rint(orders_array),
-            rtol=0.0,
-            atol=1e-12,
-        )
-    ):
-        raise ValueError(
-            "DP-FedAvg accounting currently supports integer Rényi "
-            "orders only."
-        )
-
-    integer_orders = np.rint(orders_array).astype(np.int64)
-
-    if np.any(np.diff(integer_orders) <= 0):
-        raise ValueError(
-            "Requested Rényi orders must be strictly increasing."
-        )
-
-    return integer_orders
-
-
 def _log_combination(n: int, k: int) -> float:
     """
     Compute log(binomial(n, k)).
@@ -378,21 +272,6 @@ def _log_combination(n: int, k: int) -> float:
         - math.lgamma(k + 1)
         - math.lgamma(n - k + 1)
     )
-
-
-def _gaussian_rdp(
-    order: int,
-    sigma_gaussian_actual: float,
-) -> float:
-    """
-    RDP epsilon of the Gaussian mechanism.
-    """
-    return (
-        0.5
-        * float(order)
-        / (sigma_gaussian_actual ** 2)
-    )
-
 
 def _subsampled_cgf_bound_integer_order(
     order: int,
@@ -410,12 +289,12 @@ def _subsampled_cgf_bound_integer_order(
     ``base_rdp_at_order(j)`` must provide a valid RDP upper bound for the
     unsubsampled base mechanism at each integer ``j`` in {2, ..., order}.
     """
-    order = _validate_positive_integer(order, "order")
+    order = validate_positive_integer(order, "order")
 
     if order < 2:
         raise ValueError("order must be at least 2.")
 
-    sampling_probability = _validate_probability(
+    sampling_probability = validate_probability(
         sampling_probability,
         "sampling_probability",
     )
@@ -482,7 +361,7 @@ def _compute_local_rdp_with_bounds(
     num_local_updates = config.num_local_updates
 
     def gaussian_rdp_at_order(order: int) -> float:
-        return _gaussian_rdp(order, sigma_actual)
+        return gaussian_rdp(order, sigma_actual)
 
     local_rdp_values = []
 
@@ -553,16 +432,17 @@ def _compute_local_rdp_numerically(
     accountant = RdpAccountant(orders_list)
     accountant.compose(total_local_event)
 
-    # dp_accounting currently stores the evaluated curve in _rdp.
-    numerical_values = np.asarray(
-        accountant._rdp,
-        dtype=float,
-    )
+    # Newer dp_accounting versions expose the curve publicly. Retain the
+    # private-attribute fallback for older supported installations.
+    accountant_rdp = getattr(accountant, "rdp", None)
+    if accountant_rdp is None:
+        accountant_rdp = accountant._rdp
+    numerical_values = np.asarray(accountant_rdp, dtype=float)
 
     unsubsampled_values = np.asarray(
         [
             config.num_local_updates
-            * _gaussian_rdp(
+            * gaussian_rdp(
                 int(order),
                 config.sigma_gaussian_actual,
             )
@@ -687,7 +567,7 @@ def compute_dpfedavg_rdp(
     normalized_method = _normalize_accounting_method(
         accounting_method
     )
-    requested_orders = _normalize_requested_integer_orders(
+    requested_orders = normalize_requested_integer_orders(
         orders
     )
 

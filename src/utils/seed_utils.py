@@ -4,6 +4,7 @@ import torch
 
 
 DP_NOISE_STREAM = 1
+DATA_SAMPLING_STREAM = 2
 
 
 def set_global_seed(seed: int = 42) -> None:

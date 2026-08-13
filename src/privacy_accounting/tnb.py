@@ -21,21 +21,12 @@ import numpy as np
 from scipy.optimize import brentq
 from scipy.special import gammaln, gammasgn
 
+from .validation import validate_eta, validate_positive_integer
+
 
 _ETA_ZERO_TOL = 1e-12
 _GAMMA_LOWER = 1e-12
 _GAMMA_UPPER = 1.0 - 1e-12
-
-
-def _validate_eta(eta: float) -> float:
-    eta = float(eta)
-
-    if not math.isfinite(eta):
-        raise ValueError("eta must be finite.")
-    if eta <= -1.0:
-        raise ValueError("eta must satisfy eta > -1.")
-
-    return eta
 
 
 def _validate_gamma(gamma: float) -> float:
@@ -49,18 +40,6 @@ def _validate_gamma(gamma: float) -> float:
     return gamma
 
 
-def _validate_positive_integer(value: int, name: str) -> int:
-    if not isinstance(value, Integral):
-        raise TypeError(f"{name} must be an integer.")
-
-    value = int(value)
-
-    if value < 1:
-        raise ValueError(f"{name} must be at least 1.")
-
-    return value
-
-
 def _is_eta_zero(eta: float) -> bool:
     return abs(eta) < _ETA_ZERO_TOL
 
@@ -69,7 +48,7 @@ def _mean_from_parameters(eta: float, gamma: float) -> float:
     """
     Compute the unconditional mean E[K0].
     """
-    eta = _validate_eta(eta)
+    eta = validate_eta(eta)
     gamma = _validate_gamma(gamma)
 
     if _is_eta_zero(eta):
@@ -87,7 +66,7 @@ def _pmf_from_parameters(k: int, eta: float, gamma: float) -> float:
     """
     Compute P(K0 = k), where K0 is supported on {1, 2, ...}.
     """
-    eta = _validate_eta(eta)
+    eta = validate_eta(eta)
     gamma = _validate_gamma(gamma)
 
     if not isinstance(k, Integral):
@@ -143,7 +122,7 @@ def _probability_less_than_from_parameters(
     """
     Compute P(K0 < m).
     """
-    m = _validate_positive_integer(m, "m")
+    m = validate_positive_integer(m, "m")
 
     probability = math.fsum(
         _pmf_from_parameters(k, eta, gamma)
@@ -161,7 +140,7 @@ def _conditional_mean_from_parameters(
     """
     Compute E[K0 | K0 >= m].
     """
-    m = _validate_positive_integer(m, "m")
+    m = validate_positive_integer(m, "m")
 
     probability_less_than_m = _probability_less_than_from_parameters(
         m, eta, gamma
@@ -200,7 +179,7 @@ def _solve_gamma_for_mean(
     """
     Solve E[K0] = target_mean for gamma.
     """
-    eta = _validate_eta(eta)
+    eta = validate_eta(eta)
     target_mean = float(target_mean)
 
     if not math.isfinite(target_mean):
@@ -243,8 +222,8 @@ def _solve_gamma_for_conditional_mean(
     """
     Solve E[K0 | K0 >= m] = target_mean for gamma.
     """
-    eta = _validate_eta(eta)
-    m = _validate_positive_integer(m, "m")
+    eta = validate_eta(eta)
+    m = validate_positive_integer(m, "m")
     target_mean = float(target_mean)
 
     if not math.isfinite(target_mean):
@@ -330,7 +309,7 @@ class TNBDistribution:
     gamma: float
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "eta", _validate_eta(self.eta))
+        object.__setattr__(self, "eta", validate_eta(self.eta))
         object.__setattr__(self, "gamma", _validate_gamma(self.gamma))
 
     @classmethod
@@ -457,7 +436,7 @@ class TNBDistribution:
         rng: np.random.Generator | None = None,
     ) -> int:
         """Draw and return K0 conditioned on K0 >= m."""
-        m = _validate_positive_integer(m, "m")
+        m = validate_positive_integer(m, "m")
 
         if m == 1:
             return self.sample(rng)
@@ -494,7 +473,7 @@ class TNBDistribution:
 
         where K = K0 | K0 >= m.
         """
-        m = _validate_positive_integer(m, "m")
+        m = validate_positive_integer(m, "m")
         survival = self.survival_probability(m)
 
         log_value = (

@@ -1,6 +1,5 @@
 
-
-name: exp1_compute_matched_utility_central
+name: exp2_compute_matched_utility_central
 
 runner: utility_compute_plot
 seed: 1
@@ -9,13 +8,13 @@ simulation:
   method: two_stage_tuning
   run_hp_configuration: H2
   stage: 1
-  stage_1_end: 75
-  stage_2_end: 150
+  stage_1_end: 2000
+  stage_2_end: 5000
 
 run_mode:
   generate_stage_1_plan: false
-  generate_stage_2_plan: false
-  run_simulation_stage_1: true
+  generate_stage_2_plan: true
+  run_simulation_stage_1: false
   run_simulation_stage_2: false
   compile_result: false
 
@@ -33,14 +32,24 @@ output:
   results_root: ${paths.results_root}
 
 dataset:
-  name: synthetic
-  batch_size: 32
+  name: mnist
+  batch_size: 300
   root: data/central
   download: true
   num_workers: 0
   pin_memory: false
   shuffle_train: true
   drop_last_train: false
+  loss_fn: CrossEntropyLoss
+  x_label: "x"
+  y_label: "y"
+  model:
+    # FashionMNIST uses this width; MNIST uses the fixed Opacus CNN.
+    hidden_width: 120
+    activation:
+      scale: 2.0
+      inverse_temperature: 2.0
+      offset: 1.0
 
   # Used only when name: synthetic.
   num_samples: 10000
@@ -59,3 +68,19 @@ dataset:
   vocabulary_size: 20000
   minimum_token_frequency: 1
   maximum_sequence_length: 256
+
+privacy:
+  delta: 1e-5
+  max_renyi_order: 1000
+
+evaluation:
+  selection:
+    metric: train_loss
+    mode: min
+  utility:
+    metrics:
+      - train_loss
+      - train_accuracy
+      - test_loss
+      - test_accuracy
+    at: selection_round

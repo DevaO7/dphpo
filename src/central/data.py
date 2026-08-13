@@ -266,9 +266,12 @@ def _load_imdb_datasets(
 
 def _load_datasets(dataset_config):
     name = _normalize_dataset_name(dataset_config.name)
-    data_root = str(
-        Path(dataset_config.get("root", "data/central")).expanduser()
-    )
+    data_root = Path(
+        dataset_config.get("root", "data/central")
+    ).expanduser()
+    if not data_root.is_absolute():
+        data_root = Path(__file__).resolve().parents[1] / data_root
+    data_root = str(data_root.resolve())
 
     if name in _VISION_DATASETS:
         return _load_vision_datasets(
