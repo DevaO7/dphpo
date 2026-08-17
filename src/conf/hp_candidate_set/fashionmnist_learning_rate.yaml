@@ -1,0 +1,30 @@
+H1:
+  step_size: 1.0e-3
+
+H2:
+  step_size: 0.00316227766
+
+H3:
+  step_size: 1.0e-2
+
+H4:
+  step_size: 0.0316227766
+
+H5:
+  step_size: 1.0e-1
+
+H6:
+  step_size: 0.316227766
+
+H7:
+  step_size: 1.0
+
+H8:
+  step_size: 3.16227766
+
+H9:
+  step_size: 10.0
+
+H10:
+  step_size: 31.6227766
+ 

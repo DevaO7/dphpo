@@ -57,6 +57,8 @@ src/result_non_iid.sh
 src/privacy_accounting/test.py
 runs
 paper
+src/job_privacy_matched.sh
+src/job_privacy_matched_2.sh
 
 # Installer logs
 pip-log.txt
@@ -65,6 +67,8 @@ src/results
 src/job_run.sh
 AGENTS.md
 docs/
+results_central
+data
 
 # Unit test / coverage reports
 htmlcov/

@@ -1,11 +1,14 @@
 """Deterministic TNB trial-plan generation shared by all trainers."""
 
 from collections import Counter
+import copy
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 
+from privacy_accounting import dpsgd, rdp_utils, selection_accounting
 from privacy_accounting.tnb import (
     TNBDistribution,
     _solve_gamma_for_conditional_mean,
@@ -23,6 +26,15 @@ PLAN_FILENAMES = {
         2: "two_stage_tuning_stage_2.JSON",
     },
 }
+
+PRIVACY_MATCHED_POINT_METADATA_FIELDS = (
+    "target_epsilon",
+    "achieved_epsilon",
+    "delta",
+    "noise_multiplier",
+    "best_renyi_order",
+    "privacy_calibration",
+)
 
 # UserAVG multiplies this seed by as much as 500 before passing it
 # to NumPy's legacy uint32 RNG. Leave enough headroom for the round,
@@ -292,12 +304,31 @@ def generate_plan(
     run_id,
     hp_configuration_ids,
     plan_filename,
+    *,
+    point_metadata=None,
+    plan_metadata=None,
+    plan_directory=None,
 ):
-    """Generate and persist a deterministic static HPO trial plan."""
+    """Generate and persist a deterministic static HPO trial plan.
+
+    ``point_metadata`` and ``plan_metadata`` allow experiment-specific
+    planners to attach immutable metadata while retaining the shared TNB
+    sampling, seed derivation, and run-deduplication logic.
+    """
     if method not in PLAN_FILENAMES:
         raise ValueError(
             f"Unknown plan method {method!r}."
         )
+
+    E_K_values = list(E_K_values)
+    if point_metadata is None:
+        point_metadata = [{} for _ in E_K_values]
+    elif len(point_metadata) != len(E_K_values):
+        raise ValueError(
+            "point_metadata must contain one mapping per E_K value."
+        )
+    if plan_metadata is None:
+        plan_metadata = {}
 
     hp_configuration_counts = {
         hp_id: 0
@@ -353,13 +384,20 @@ def generate_plan(
                     current_count,
                 )
 
-        points.append(
-            {
-                "E_K": float(E_K),
-                "gamma": float(gamma),
-                "trials": trials,
-            }
-        )
+        point = {
+            "E_K": float(E_K),
+            "gamma": float(gamma),
+            "trials": trials,
+        }
+        metadata = dict(point_metadata[point_index])
+        conflicting_keys = set(point).intersection(metadata)
+        if conflicting_keys:
+            raise ValueError(
+                "point_metadata may not replace core plan fields: "
+                f"{sorted(conflicting_keys)}."
+            )
+        point.update(metadata)
+        points.append(point)
 
     total_num_required_runs = sum(
         required_hp_configuration_runs.values()
@@ -402,6 +440,13 @@ def generate_plan(
             ),
         },
     }
+    conflicting_keys = set(plan).intersection(plan_metadata)
+    if conflicting_keys:
+        raise ValueError(
+            "plan_metadata may not replace core plan fields: "
+            f"{sorted(conflicting_keys)}."
+        )
+    plan.update(dict(plan_metadata))
     plan = map_stage_1_plan_runs(plan, hp_configuration_ids)
 
     if include_stage_2_specs:
@@ -427,12 +472,15 @@ def generate_plan(
                     for run in trial["sampled_stage_1_runs"]
                 ]
 
-    plan_directory = (
-        Path(config.output.results_root)
-        / str(config.name)
-        / str(run_id)
-        / "plan"
-    )
+    if plan_directory is None:
+        plan_directory = (
+            Path(config.output.results_root)
+            / str(config.name)
+            / str(run_id)
+            / "plan"
+        )
+    else:
+        plan_directory = Path(plan_directory)
     plan_directory.mkdir(parents=True, exist_ok=True)
     plan_path = plan_directory / plan_filename
 
@@ -448,6 +496,7 @@ def generate_plan(
             temporary_path.unlink()
 
     return plan_path
+
 
 def get_simulation_method(config) -> str:
     method = str(config.simulation.method)
@@ -465,14 +514,16 @@ def get_simulation_method(config) -> str:
 def load_stage_1_plan(
     config,
     plan_filename="two_stage_tuning_stage_1.JSON",
+    plan_directory=None,
 ):
-    plan_path = (
-        Path(config.output.results_root)
-        / str(config.name)
-        / str(config.run_id)
-        / "plan"
-        / plan_filename
-    )
+    if plan_directory is None:
+        plan_directory = (
+            Path(config.output.results_root)
+            / str(config.name)
+            / str(config.run_id)
+            / "plan"
+        )
+    plan_path = Path(plan_directory) / plan_filename
 
     if not plan_path.is_file():
         raise FileNotFoundError(
@@ -515,14 +566,16 @@ def load_stage_1_plan(
 def load_stage_2_plan(
     config,
     plan_filename="two_stage_tuning_stage_2.JSON",
+    plan_directory=None,
 ):
-    plan_path = (
-        Path(config.output.results_root)
-        / str(config.name)
-        / str(config.run_id)
-        / "plan"
-        / plan_filename
-    )
+    if plan_directory is None:
+        plan_directory = (
+            Path(config.output.results_root)
+            / str(config.name)
+            / str(config.run_id)
+            / "plan"
+        )
+    plan_path = Path(plan_directory) / plan_filename
     if not plan_path.is_file():
         raise FileNotFoundError(
             "Stage-2 plan does not exist: "
@@ -1191,17 +1244,19 @@ def build_stage_2_plan(
                 }
             )
 
-        points.append(
-            {
-                "stage_1_E_K": float(stage_1_point["E_K"]),
-                "stage_1_gamma": float(
-                    stage_1_point["gamma"]
-                ),
-                "stage_2_E_K": stage_2_expected_k,
-                "stage_2_gamma": float(stage_2_gamma),
-                "trials": stage_2_trials,
-            }
-        )
+        stage_2_point = {
+            "stage_1_E_K": float(stage_1_point["E_K"]),
+            "stage_1_gamma": float(stage_1_point["gamma"]),
+            "stage_2_E_K": stage_2_expected_k,
+            "stage_2_gamma": float(stage_2_gamma),
+            "trials": stage_2_trials,
+        }
+        for key in PRIVACY_MATCHED_POINT_METADATA_FIELDS:
+            if key in stage_1_point:
+                stage_2_point[key] = copy.deepcopy(
+                    stage_1_point[key]
+                )
+        points.append(stage_2_point)
 
     required_run_directories = []
     required_run_specs = []
@@ -1262,7 +1317,7 @@ def build_stage_2_plan(
             "Change the plan seed and regenerate the plans."
         )
 
-    return {
+    stage_2_plan = {
         "method": "two_stage_tuning",
         "selection_method": "papernot_top1",
         "eta": float(config.eta),
@@ -1295,22 +1350,30 @@ def build_stage_2_plan(
             "required_stage_2_run_specs": required_run_specs,
         },
     }
+    if "plan_type" in stage_1_plan:
+        stage_2_plan["plan_type"] = stage_1_plan["plan_type"]
+    return stage_2_plan
 
 def generate_stage_2_plan(
     stage_1_plan,
     config,
     plan_filename="two_stage_tuning_stage_2.JSON",
+    *,
+    plan_directory=None,
 ):
     stage_2_plan = build_stage_2_plan(
         stage_1_plan,
         config,
     )
-    plan_directory = (
-        Path(config.output.results_root)
-        / str(config.name)
-        / str(config.run_id)
-        / "plan"
-    )
+    if plan_directory is None:
+        plan_directory = (
+            Path(config.output.results_root)
+            / str(config.name)
+            / str(config.run_id)
+            / "plan"
+        )
+    else:
+        plan_directory = Path(plan_directory)
     plan_directory.mkdir(
         parents=True,
         exist_ok=True,
@@ -1344,3 +1407,673 @@ def generate_stage_2_plan(
             temporary_path.unlink()
 
     return plan_path
+
+
+def _validate_positive_finite(value, name):
+    value = float(value)
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be finite and positive.")
+    return value
+
+
+def _privacy_calibration_settings(config, target_epsilon):
+    """Validate and return shared central DP-SGD calibration settings."""
+    exp_config = config.experiment
+    target_epsilon = _validate_positive_finite(
+        target_epsilon,
+        "target_epsilon",
+    )
+    delta = float(exp_config.privacy.delta)
+    if not math.isfinite(delta) or not 0.0 < delta < 1.0:
+        raise ValueError("privacy.delta must satisfy 0 < delta < 1.")
+
+    max_renyi_order = int(exp_config.privacy.max_renyi_order)
+    if max_renyi_order < 3:
+        raise ValueError(
+            "privacy.max_renyi_order must be at least 3."
+        )
+
+    stage_1_end = int(exp_config.simulation.stage_1_end)
+    stage_2_end = int(exp_config.simulation.stage_2_end)
+    if stage_1_end <= 0 or stage_2_end <= stage_1_end:
+        raise ValueError(
+            "Privacy calibration requires 0 < stage_1_end < "
+            "stage_2_end."
+        )
+
+    if not bool(config.run_settings.dp):
+        raise ValueError(
+            "Privacy calibration requires run_settings.dp=true."
+        )
+    if (
+        str(config.run_settings.data_sampling_scheme)
+        != "poisson_sampling"
+    ):
+        raise ValueError(
+            "Central DP-SGD privacy calibration requires "
+            "data_sampling_scheme='poisson_sampling'."
+        )
+
+    sampling_rate = float(config.run_settings.sampling_rate)
+    if (
+        not math.isfinite(sampling_rate)
+        or not 0.0 < sampling_rate <= 1.0
+    ):
+        raise ValueError(
+            "run_settings.sampling_rate must satisfy 0 < rate <= 1."
+        )
+
+    search_config = exp_config.privacy.get("sigma_search", {})
+    initial_sigma = _validate_positive_finite(
+        search_config.get(
+            "initial_sigma",
+            config.run_settings.noise_multiplier,
+        ),
+        "privacy.sigma_search.initial_sigma",
+    )
+    minimum_sigma = _validate_positive_finite(
+        search_config.get("minimum_sigma", 1e-3),
+        "privacy.sigma_search.minimum_sigma",
+    )
+    maximum_sigma = _validate_positive_finite(
+        search_config.get("maximum_sigma", 1e3),
+        "privacy.sigma_search.maximum_sigma",
+    )
+    if not minimum_sigma < maximum_sigma:
+        raise ValueError(
+            "privacy.sigma_search.minimum_sigma must be smaller "
+            "than maximum_sigma."
+        )
+    if not minimum_sigma <= initial_sigma <= maximum_sigma:
+        raise ValueError(
+            "privacy.sigma_search.initial_sigma must lie within the "
+            "configured search interval."
+        )
+
+    relative_tolerance = _validate_positive_finite(
+        search_config.get("relative_tolerance", 1e-6),
+        "privacy.sigma_search.relative_tolerance",
+    )
+    if relative_tolerance >= 1.0:
+        raise ValueError(
+            "privacy.sigma_search.relative_tolerance must be less "
+            "than 1."
+        )
+    raw_max_iterations = search_config.get("max_iterations", 80)
+    if isinstance(raw_max_iterations, bool):
+        raise ValueError(
+            "privacy.sigma_search.max_iterations must be a positive "
+            "integer."
+        )
+    max_iterations = int(raw_max_iterations)
+    if max_iterations <= 0 or max_iterations != raw_max_iterations:
+        raise ValueError(
+            "privacy.sigma_search.max_iterations must be a positive "
+            "integer."
+        )
+
+    return {
+        "target_epsilon": target_epsilon,
+        "delta": delta,
+        "orders": np.arange(2, max_renyi_order + 1),
+        "min_renyi_order": 2,
+        "max_renyi_order": max_renyi_order,
+        "stage_1_num_rounds": stage_1_end,
+        "stage_2_num_rounds": stage_2_end - stage_1_end,
+        "sampling_rate": sampling_rate,
+        "initial_sigma": initial_sigma,
+        "minimum_sigma": minimum_sigma,
+        "maximum_sigma": maximum_sigma,
+        "relative_tolerance": relative_tolerance,
+        "max_iterations": max_iterations,
+    }
+
+
+def _epsilon_for_noise_multiplier(
+    config,
+    method,
+    expected_num_trials,
+    noise_multiplier,
+    settings,
+):
+    """Evaluate end-to-end HPO epsilon for one candidate sigma."""
+    common_config = {
+        "data_sampling_rate": settings["sampling_rate"],
+        "sigma_gaussian": float(noise_multiplier),
+    }
+    stage_1_curve = dpsgd.compute_dpsgd_rdp(
+        config={
+            **common_config,
+            "num_rounds": settings["stage_1_num_rounds"],
+        },
+        orders=settings["orders"],
+    )
+    stage_2_curve = dpsgd.compute_dpsgd_rdp(
+        config={
+            **common_config,
+            "num_rounds": settings["stage_2_num_rounds"],
+        },
+        orders=settings["orders"],
+    )
+
+    eta = float(config.experiment.eta)
+    if method == "papernot_baseline":
+        selection_result = selection_accounting.compute_top1_rdp(
+            base_rdp_curve=rdp_utils.compose_rdp_curves(
+                stage_1_curve,
+                stage_2_curve,
+            ),
+            expected_num_trials=expected_num_trials,
+            eta=eta,
+        )
+    elif method == "two_stage_tuning":
+        two_stage_settings = get_two_stage_settings(config.experiment)
+        selection_result = selection_accounting.compute_two_stage_rdp(
+            stage_1_base_rdp_curve=stage_1_curve,
+            stage_2_base_rdp_curve=stage_2_curve,
+            m=two_stage_settings.num_survivors,
+            expected_num_trials_stage_1=expected_num_trials,
+            expected_num_trials_stage_2=(
+                two_stage_settings.stage_2_expected_trials
+            ),
+            eta_stage_1=eta,
+            eta_stage_2=eta,
+        )
+    else:
+        raise ValueError(f"Unknown privacy-calibration method {method!r}.")
+
+    return rdp_utils.convert_rdp_to_approx_dp(
+        selection_result.rdp_curve,
+        delta=settings["delta"],
+    )
+
+
+def _calibrate_noise_multiplier(
+    config,
+    method,
+    target_epsilon,
+    expected_num_trials,
+):
+    """Find the smallest feasible sigma using bracketed log bisection."""
+    if method not in PLAN_FILENAMES:
+        raise ValueError(f"Unknown plan method {method!r}.")
+    expected_num_trials = _validate_positive_finite(
+        expected_num_trials,
+        "expected_num_trials",
+    )
+    settings = _privacy_calibration_settings(
+        config,
+        target_epsilon,
+    )
+    target_epsilon = settings["target_epsilon"]
+    evaluations = 0
+
+    def evaluate(sigma):
+        nonlocal evaluations
+        evaluations += 1
+        return _epsilon_for_noise_multiplier(
+            config=config,
+            method=method,
+            expected_num_trials=expected_num_trials,
+            noise_multiplier=sigma,
+            settings=settings,
+        )
+
+    initial_sigma = settings["initial_sigma"]
+    initial_result = evaluate(initial_sigma)
+
+    if initial_result.epsilon > target_epsilon:
+        lower_sigma = initial_sigma
+        lower_result = initial_result
+        upper_sigma = initial_sigma
+        upper_result = initial_result
+        while upper_result.epsilon > target_epsilon:
+            lower_sigma = upper_sigma
+            lower_result = upper_result
+            upper_sigma = min(
+                2.0 * upper_sigma,
+                settings["maximum_sigma"],
+            )
+            if upper_sigma == lower_sigma:
+                raise ValueError(
+                    "Could not satisfy target_epsilon within the "
+                    "configured maximum_sigma."
+                )
+            upper_result = evaluate(upper_sigma)
+    else:
+        upper_sigma = initial_sigma
+        upper_result = initial_result
+        lower_sigma = initial_sigma
+        lower_result = initial_result
+        while lower_result.epsilon <= target_epsilon:
+            upper_sigma = lower_sigma
+            upper_result = lower_result
+            lower_sigma = max(
+                0.5 * lower_sigma,
+                settings["minimum_sigma"],
+            )
+            if lower_sigma == upper_sigma:
+                raise ValueError(
+                    "Could not bracket target_epsilon within the "
+                    "configured minimum_sigma."
+                )
+            lower_result = evaluate(lower_sigma)
+
+    if not (
+        lower_result.epsilon > target_epsilon
+        and upper_result.epsilon <= target_epsilon
+    ):
+        raise RuntimeError(
+            "Noise calibration failed to construct a valid bracket."
+        )
+
+    iterations = 0
+    for iterations in range(1, settings["max_iterations"] + 1):
+        if (
+            (upper_sigma - lower_sigma) / upper_sigma
+            <= settings["relative_tolerance"]
+        ):
+            break
+        midpoint_sigma = math.sqrt(lower_sigma * upper_sigma)
+        midpoint_result = evaluate(midpoint_sigma)
+        if midpoint_result.epsilon > target_epsilon:
+            lower_sigma = midpoint_sigma
+            lower_result = midpoint_result
+        else:
+            upper_sigma = midpoint_sigma
+            upper_result = midpoint_result
+    else:
+        raise RuntimeError(
+            "Noise calibration did not converge within max_iterations."
+        )
+
+    if upper_result.is_at_min_order or upper_result.is_at_max_order:
+        boundary = (
+            "minimum"
+            if upper_result.is_at_min_order
+            else "maximum"
+        )
+        raise RuntimeError(
+            "The calibrated privacy result uses the "
+            f"{boundary} configured Renyi order "
+            f"({upper_result.best_order}). Expand the order range."
+        )
+
+    return {
+        "method": method,
+        "target_epsilon": target_epsilon,
+        "achieved_epsilon": float(upper_result.epsilon),
+        "delta": float(upper_result.delta),
+        "noise_multiplier": float(upper_sigma),
+        "best_renyi_order": float(upper_result.best_order),
+        "min_renyi_order": settings["min_renyi_order"],
+        "max_renyi_order": settings["max_renyi_order"],
+        "relative_sigma_tolerance": settings["relative_tolerance"],
+        "bisection_iterations": iterations,
+        "accountant_evaluations": evaluations,
+        "accounting_method": "numerical",
+    }
+
+
+def get_sigma_for_target_epsilon_papernot(
+    config,
+    target_epsilon,
+    E_k,
+):
+    """Return Papernot's calibrated sigma for one (epsilon, E[K])."""
+    return _calibrate_noise_multiplier(
+        config=config,
+        method="papernot_baseline",
+        target_epsilon=target_epsilon,
+        expected_num_trials=E_k,
+    )["noise_multiplier"]
+
+
+def get_sigma_for_target_epsilon_two_stage(
+    config,
+    target_epsilon,
+    E_k,
+):
+    """Return two-stage calibrated sigma for one (epsilon, E[K1])."""
+    return _calibrate_noise_multiplier(
+        config=config,
+        method="two_stage_tuning",
+        target_epsilon=target_epsilon,
+        expected_num_trials=E_k,
+    )["noise_multiplier"]
+
+
+def _path_value_slug(value, name):
+    value = _validate_positive_finite(value, name)
+    text = np.format_float_positional(value, trim="-")
+    return text.replace(".", "p")
+
+
+def get_privacy_matched_plan_directory(
+    config,
+    method,
+    target_epsilon,
+    E_k,
+):
+    """Return the plan directory for one privacy-matched cell."""
+    exp_config = config.experiment
+    return (
+        Path(exp_config.output.results_root)
+        / str(exp_config.name)
+        / str(exp_config.run_id)
+        / "plan"
+        / get_privacy_matched_point_relative_directory(
+            method=method,
+            target_epsilon=target_epsilon,
+            E_k=E_k,
+        )
+    )
+
+
+def get_privacy_matched_point_relative_directory(
+    method,
+    target_epsilon,
+    E_k,
+):
+    """Return ``method/epsilon/mu`` for one experiment cell."""
+    if method not in PLAN_FILENAMES:
+        raise ValueError(f"Unknown plan method {method!r}.")
+    epsilon_slug = _path_value_slug(
+        target_epsilon,
+        "target_epsilon",
+    )
+    mu_slug = _path_value_slug(E_k, "E_k")
+    return Path(
+        method,
+        f"epsilon_{epsilon_slug}",
+        f"mu_{mu_slug}",
+    )
+
+
+def get_privacy_matched_simulations_directory(
+    config,
+    method,
+    target_epsilon,
+    E_k,
+):
+    """Return the simulation root for one privacy-matched cell."""
+    exp_config = config.experiment
+    return (
+        Path(exp_config.output.results_root)
+        / str(exp_config.name)
+        / str(exp_config.run_id)
+        / "simulations"
+        / get_privacy_matched_point_relative_directory(
+            method=method,
+            target_epsilon=target_epsilon,
+            E_k=E_k,
+        )
+    )
+
+
+def generate_privacy_matched_plan(
+    config,
+    method,
+    target_epsilon,
+    E_k,
+    plan_filename=None,
+):
+    """Generate one calibrated Stage-1 plan for an (epsilon, mu) cell."""
+    if method not in PLAN_FILENAMES:
+        raise ValueError(f"Unknown plan method {method!r}.")
+    exp_config = config.experiment
+    E_k = _validate_positive_finite(E_k, "E_k")
+    calibration = _calibrate_noise_multiplier(
+        config=config,
+        method=method,
+        target_epsilon=target_epsilon,
+        expected_num_trials=E_k,
+    )
+    if method == "papernot_baseline":
+        m = 1
+    else:
+        m = get_two_stage_settings(exp_config).num_survivors
+
+    if plan_filename is None:
+        plan_filename = PLAN_FILENAMES[method][1]
+    point_metadata = {
+        "target_epsilon": calibration["target_epsilon"],
+        "achieved_epsilon": calibration["achieved_epsilon"],
+        "delta": calibration["delta"],
+        "noise_multiplier": calibration["noise_multiplier"],
+        "best_renyi_order": calibration["best_renyi_order"],
+        "privacy_calibration": calibration,
+    }
+    if method == "two_stage_tuning":
+        two_stage_settings = get_two_stage_settings(exp_config)
+        point_metadata.update(
+            {
+                "stage_1_expected_num_trials": E_k,
+                "stage_2_expected_num_trials": (
+                    two_stage_settings.stage_2_expected_trials
+                ),
+            }
+        )
+
+    return generate_plan(
+        exp_config,
+        method,
+        m,
+        [E_k],
+        exp_config.num_trials,
+        exp_config.run_id,
+        exp_config.hp_configuration_ids,
+        plan_filename,
+        point_metadata=[point_metadata],
+        plan_metadata={"plan_type": "privacy_matched"},
+        plan_directory=get_privacy_matched_plan_directory(
+            config=config,
+            method=method,
+            target_epsilon=target_epsilon,
+            E_k=E_k,
+        ),
+    )
+
+
+def load_privacy_matched_simulation_plan(config, stage):
+    """Load and validate one nested privacy-matched simulation plan."""
+    if stage not in {1, 2}:
+        raise ValueError(
+            f"Simulation stage must be 1 or 2; got {stage!r}."
+        )
+
+    exp_config = config.experiment
+    method = get_simulation_method(exp_config)
+    target_epsilon = _validate_positive_finite(
+        exp_config.simulation.target_epsilon,
+        "simulation.target_epsilon",
+    )
+    E_k = _validate_positive_finite(
+        exp_config.simulation.mu,
+        "simulation.mu",
+    )
+    plan_filename = PLAN_FILENAMES[method][stage]
+    plan_directory = get_privacy_matched_plan_directory(
+        config=config,
+        method=method,
+        target_epsilon=target_epsilon,
+        E_k=E_k,
+    )
+    if stage == 1:
+        plan = load_stage_1_plan(
+            exp_config,
+            plan_filename=plan_filename,
+            plan_directory=plan_directory,
+        )
+    else:
+        plan = load_stage_2_plan(
+            exp_config,
+            plan_filename=plan_filename,
+            plan_directory=plan_directory,
+        )
+
+    metadata_checks = {
+        "plan_type": "privacy_matched",
+        "method": method,
+        "run_id": str(exp_config.run_id),
+        "plan_seed": int(exp_config.seed),
+        "hp_configuration_ids": [
+            str(hp_id)
+            for hp_id in exp_config.hp_configuration_ids
+        ],
+        "eta": float(exp_config.eta),
+    }
+    for key, expected_value in metadata_checks.items():
+        if plan.get(key) != expected_value:
+            raise ValueError(
+                f"Privacy-matched plan {plan_filename} has {key}="
+                f"{plan.get(key)!r}, but the experiment configuration "
+                f"requires {expected_value!r}. Regenerate the plan."
+            )
+
+    expected_top_m = (
+        1
+        if method == "papernot_baseline"
+        else get_two_stage_settings(exp_config).num_survivors
+    )
+    if plan.get("stage_1_top_m") != expected_top_m:
+        raise ValueError(
+            f"Privacy-matched plan {plan_filename} has "
+            f"stage_1_top_m={plan.get('stage_1_top_m')!r}, expected "
+            f"{expected_top_m}. Regenerate the plan."
+        )
+
+    points = plan.get("points")
+    if not isinstance(points, list) or len(points) != 1:
+        raise ValueError(
+            f"Privacy-matched plan {plan_filename} must contain "
+            "exactly one (target_epsilon, mu) point."
+        )
+    point = points[0]
+    if not isinstance(point, dict):
+        raise ValueError(
+            f"Privacy-matched plan {plan_filename} point must be "
+            "a JSON object."
+        )
+    trials = point.get("trials")
+    configured_num_trials = int(exp_config.num_trials)
+    if (
+        not isinstance(trials, list)
+        or len(trials) != configured_num_trials
+    ):
+        raise ValueError(
+            f"Privacy-matched plan {plan_filename} must contain "
+            f"{configured_num_trials} trials. Regenerate the plan."
+        )
+
+    def require_matching_float(mapping, key, expected, context):
+        try:
+            observed = float(mapping[key])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"{context} has an invalid {key!r} value."
+            ) from error
+        if (
+            not math.isfinite(observed)
+            or not math.isclose(
+                observed,
+                float(expected),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError(
+                f"{context} has {key}={observed!r}, expected "
+                f"{float(expected)!r}. Regenerate the plan."
+            )
+        return observed
+
+    point_context = f"Privacy-matched plan {plan_filename} point"
+    stage_1_E_k_key = (
+        "stage_1_E_K"
+        if stage == 2 and method == "two_stage_tuning"
+        else "E_K"
+    )
+    require_matching_float(
+        point,
+        stage_1_E_k_key,
+        E_k,
+        point_context,
+    )
+    require_matching_float(
+        point,
+        "target_epsilon",
+        target_epsilon,
+        point_context,
+    )
+    delta = float(exp_config.privacy.delta)
+    require_matching_float(point, "delta", delta, point_context)
+
+    noise_multiplier = _validate_positive_finite(
+        point.get("noise_multiplier"),
+        f"{point_context} noise_multiplier",
+    )
+    achieved_epsilon = _validate_positive_finite(
+        point.get("achieved_epsilon"),
+        f"{point_context} achieved_epsilon",
+    )
+    epsilon_tolerance = max(1e-12, target_epsilon * 1e-9)
+    if achieved_epsilon > target_epsilon + epsilon_tolerance:
+        raise ValueError(
+            f"{point_context} achieved_epsilon={achieved_epsilon!r} "
+            f"exceeds target_epsilon={target_epsilon!r}."
+        )
+
+    calibration = point.get("privacy_calibration")
+    if not isinstance(calibration, dict):
+        raise ValueError(
+            f"{point_context} must contain a privacy_calibration "
+            "object. Regenerate the plan."
+        )
+    if calibration.get("method") != method:
+        raise ValueError(
+            f"{point_context} privacy_calibration method does not "
+            "match the configured method. Regenerate the plan."
+        )
+    calibration_context = f"{point_context} privacy_calibration"
+    for key, expected_value in (
+        ("target_epsilon", target_epsilon),
+        ("achieved_epsilon", achieved_epsilon),
+        ("delta", delta),
+        ("noise_multiplier", noise_multiplier),
+    ):
+        require_matching_float(
+            calibration,
+            key,
+            expected_value,
+            calibration_context,
+        )
+
+    if stage == 2 and method == "two_stage_tuning":
+        two_stage_settings = get_two_stage_settings(exp_config)
+        require_matching_float(
+            point,
+            "stage_2_E_K",
+            two_stage_settings.stage_2_expected_trials,
+            point_context,
+        )
+        if plan.get("stage_2_selection_m") != 1:
+            raise ValueError(
+                f"Privacy-matched plan {plan_filename} must have "
+                "stage_2_selection_m=1. Regenerate the plan."
+            )
+
+    execution_summary = plan.get("execution_summary")
+    required_specs_key = f"required_stage_{stage}_run_specs"
+    required_specs = (
+        execution_summary.get(required_specs_key)
+        if isinstance(execution_summary, dict)
+        else None
+    )
+    if not isinstance(required_specs, list):
+        raise ValueError(
+            f"Privacy-matched plan {plan_filename} does not contain "
+            f"a {required_specs_key} list. Regenerate the plan."
+        )
+
+    return plan

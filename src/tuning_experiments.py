@@ -20,6 +20,7 @@ from hpo.execution import (
     get_selected_learning_rate,
     save_run_spec,
     validate_simulation_stage,
+    validate_privacy_order_search
 )
 from hpo.planning import (
     PLAN_FILENAMES,
@@ -30,12 +31,10 @@ from hpo.planning import (
 from hpo.results import (
     RESULT_FILENAMES,
     build_privacy_compute_points,
-    get_compilation_paths,
-    get_evaluation_settings,
-    load_compilation_plan,
-    compile_papernot_results,
-    compile_two_stage_results,
+    compile_experiment_results,
     generate_stage_2_plan_from_results,
+    get_compilation_paths,
+    save_privacy_compute_rows
 )
 from utils.hpo_config import get_two_stage_settings
 
@@ -200,262 +199,6 @@ def get_stage_compute_schedule(config):
         )
     ]
 
-def build_trial_result_rows(compiled_results):
-    rows = []
-    for method, result in compiled_results.items():
-        utility_metrics = result["evaluation"]["utility"][
-            "metrics"
-        ]
-        for point_index, point in enumerate(result["points"]):
-            for trial_index, trial in enumerate(point["trials"]):
-                selected_run = trial["final_selected_run"]
-                if method == "papernot_baseline":
-                    stage_1_E_K = point["E_K"]
-                    stage_2_E_K = point["E_K"]
-                    stage_1_sampled_K = trial["sampled_K"]
-                    stage_2_sampled_K = trial["sampled_K"]
-                else:
-                    stage_1_E_K = point["stage_1_E_K"]
-                    stage_2_E_K = point["stage_2_E_K"]
-                    stage_1_sampled_K = trial[
-                        "trial_stage_1"
-                    ]["sampled_K"]
-                    stage_2_sampled_K = trial[
-                        "trial_stage_2"
-                    ]["sampled_K"]
-
-                for utility_metric in utility_metrics:
-                    rows.append(
-                        {
-                            "method": method,
-                            "point_index": point_index,
-                            "trial": int(
-                                trial.get("trial", trial_index)
-                            ),
-                            "expected_compute": point[
-                                "expected_compute"
-                            ],
-                            "stage_1_E_K": stage_1_E_K,
-                            "stage_2_E_K": stage_2_E_K,
-                            "stage_1_sampled_K": (
-                                stage_1_sampled_K
-                            ),
-                            "stage_2_sampled_K": (
-                                stage_2_sampled_K
-                            ),
-                            "hp_configuration_id": selected_run[
-                                "hp_configuration_id"
-                            ],
-                            "stage_1_run_index": selected_run[
-                                "stage_1_run_index"
-                            ],
-                            "continuation_index": selected_run[
-                                "continuation_index"
-                            ],
-                            "selection_metric": selected_run[
-                                "selection"
-                            ]["metric"],
-                            "selection_mode": selected_run[
-                                "selection"
-                            ]["mode"],
-                            "selection_stage": selected_run[
-                                "selection"
-                            ]["stage"],
-                            "selection_round": selected_run[
-                                "selection"
-                            ]["round"],
-                            "selection_score": selected_run[
-                                "selection"
-                            ]["score"],
-                            "utility_metric": utility_metric,
-                            "utility_score": selected_run[
-                                "utility"
-                            ][utility_metric],
-                            "stage_1_metrics_path": selected_run[
-                                "stage_1_metrics_path"
-                            ],
-                            "stage_2_metrics_path": selected_run[
-                                "stage_2_metrics_path"
-                            ],
-                        }
-                    )
-    return rows
-
-
-def save_trial_result_rows(rows, csv_path):
-    if not rows:
-        raise ValueError("No trial result rows were compiled.")
-    with csv_path.open(
-        mode="w",
-        encoding="utf-8",
-        newline="",
-    ) as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=list(rows[0]),
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def plot_expected_compute_utility(rows, output_directory):
-    method_labels = {
-        "papernot_baseline": "Papernot baseline",
-        "two_stage_tuning": "Two-stage tuning",
-    }
-    utility_metrics = sorted(
-        {row["utility_metric"] for row in rows}
-    )
-    plot_paths = []
-
-    for utility_metric in utility_metrics:
-        figure, axis = plt.subplots(figsize=(7, 5))
-        for method in RESULT_FILENAMES:
-            method_rows = [
-                row
-                for row in rows
-                if row["method"] == method
-                and row["utility_metric"] == utility_metric
-            ]
-            values_by_compute = {}
-            for row in method_rows:
-                values_by_compute.setdefault(
-                    float(row["expected_compute"]),
-                    [],
-                ).append(float(row["utility_score"]))
-
-            expected_compute_values = sorted(values_by_compute)
-            means = []
-            ci95_half_widths = []
-            for expected_compute in expected_compute_values:
-                values = np.asarray(
-                    values_by_compute[expected_compute],
-                    dtype=float,
-                )
-                standard_deviation = (
-                    float(np.std(values, ddof=1))
-                    if values.size > 1
-                    else 0.0
-                )
-                means.append(float(np.mean(values)))
-                ci95_half_widths.append(
-                    1.96
-                    * standard_deviation
-                    / np.sqrt(values.size)
-                )
-
-            means = np.asarray(means, dtype=float)
-            ci95_half_widths = np.asarray(
-                ci95_half_widths,
-                dtype=float,
-            )
-            mean_line, = axis.plot(
-                expected_compute_values,
-                means,
-                marker="o",
-                label=method_labels[method],
-            )
-            axis.fill_between(
-                expected_compute_values,
-                means - ci95_half_widths,
-                means + ci95_half_widths,
-                color=mean_line.get_color(),
-                alpha=0.2,
-                linewidth=0,
-            )
-
-        axis.set_xlabel(
-            "Expected compute (communication rounds × local updates)"
-        )
-        axis.set_ylabel(
-            utility_metric.replace("_", " ").title()
-        )
-        axis.set_title(
-            f"{utility_metric.replace('_', ' ').title()} "
-            "vs Expected Compute"
-        )
-        axis.grid(alpha=0.25)
-        axis.legend()
-        figure.tight_layout()
-        plot_path = (
-            output_directory
-            / f"expected_compute_vs_{utility_metric}.png"
-        )
-        figure.savefig(plot_path, dpi=300)
-        plt.close(figure)
-        plot_paths.append(plot_path)
-
-    return plot_paths
-
-def compile_experiment_results(config):
-    evaluation = get_evaluation_settings(config)
-    stage_compute_schedule = get_stage_compute_schedule(config)
-    paths = get_compilation_paths(config)
-    plans = {
-        method: load_compilation_plan(config, method)
-        for method in RESULT_FILENAMES
-    }
-    compiled_results = {
-        "papernot_baseline": compile_papernot_results(
-            config=config,
-            plan=plans["papernot_baseline"],
-            evaluation=evaluation,
-            stage_compute_schedule=stage_compute_schedule,
-        ),
-        "two_stage_tuning": compile_two_stage_results(
-            config=config,
-            plan=plans["two_stage_tuning"],
-            evaluation=evaluation,
-            stage_compute_schedule=stage_compute_schedule,
-        ),
-    }
-
-    compiled_root = paths["compiled_root"]
-    compiled_root.mkdir(parents=True, exist_ok=True)
-    result_paths = {}
-    for method, result in compiled_results.items():
-        plan_path = (
-            paths["plan_root"]
-            / PLAN_FILENAMES[method][2]
-        )
-        result["source_plan_path"] = str(plan_path)
-        result_path = compiled_root / RESULT_FILENAMES[method]
-        with result_path.open(
-            mode="w",
-            encoding="utf-8",
-        ) as file:
-            encoder = json.JSONEncoder(
-                indent=4,
-                allow_nan=False,
-            )
-            pending_characters = 0
-
-            for chunk in encoder.iterencode(result):
-                file.write(chunk)
-                pending_characters += len(chunk)
-
-                if pending_characters >= 1_000_000:
-                    file.flush()
-                    pending_characters = 0
-        result_paths[method] = result_path
-
-    trial_rows = build_trial_result_rows(compiled_results)
-    trial_csv_path = compiled_root / "trial_results.csv"
-    save_trial_result_rows(
-        rows=trial_rows,
-        csv_path=trial_csv_path,
-    )
-    plot_paths = plot_expected_compute_utility(
-        rows=trial_rows,
-        output_directory=compiled_root,
-    )
-
-    return {
-        "result_paths": result_paths,
-        "trial_csv_path": trial_csv_path,
-        "plot_paths": plot_paths,
-    }
-
 def calculate_E_K_given_compute_for_papernot(compute, local_updates_schedule):
     E_K = compute/sum(local_updates_schedule)
     return E_K
@@ -610,38 +353,6 @@ def load_compiled_privacy_compute_points(config):
             two_stage_result["stage_1_top_m"]
         ),
     }
-
-
-def validate_privacy_order_search(dp_result, method, expected_compute):
-    if dp_result.is_at_min_order or dp_result.is_at_max_order:
-        boundary = (
-            "minimum"
-            if dp_result.is_at_min_order
-            else "maximum"
-        )
-        raise RuntimeError(
-            f"The optimal Rényi order for {method} at expected "
-            f"compute {expected_compute} is the {boundary} stored "
-            f"order ({dp_result.best_order}). Expand the configured "
-            "Rényi-order range before reporting epsilon."
-        )
-
-
-def save_privacy_compute_rows(rows, csv_path):
-    if not rows:
-        raise ValueError("No privacy-compute result rows were produced.")
-    with csv_path.open(
-        mode="w",
-        encoding="utf-8",
-        newline="",
-    ) as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=list(rows[0]),
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-
 
 def plot_privacy_compute_plot(config):
     exp_config = config.experiment
@@ -951,7 +662,16 @@ def utility_compute_plot(config: DictConfig) -> None:
         )
 
     if exp_config.run_mode.compile_result:
-        compile_experiment_results(exp_config)
+        outputs = compile_experiment_results(
+            exp_config,
+            stage_compute_schedule=get_stage_compute_schedule(
+                exp_config
+            ),
+        )
+        print(
+            f"Compiled federated results: {outputs['trial_csv_path']}",
+            flush=True,
+        )
 
 EXPERIMENT_RUNNERS = {
     "utility_compute_plot": utility_compute_plot,

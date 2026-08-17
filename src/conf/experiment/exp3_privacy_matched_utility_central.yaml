@@ -1,26 +1,26 @@
+name: exp3_privacy_matched_utility_central
 
-name: exp2_compute_matched_utility_central
-
-runner: utility_compute_plot
+runner: utility_privacy_plot
 seed: 1
 
 simulation:
   method: papernot_baseline
   run_hp_configuration: H2
-  stage: 1
+  stage: 2
   stage_1_end: 2000
   stage_2_end: 5000
+  mu: 10
+  target_epsilon: 0.9
 
 run_mode:
-  generate_stage_1_plan: false
+  generate_stage_1_plan: true
   generate_stage_2_plan: false
   run_simulation_stage_1: false
   run_simulation_stage_2: false
-  compile_result: true
+  compile_result: false
 
-base_E_K_list: [5, 7, 10, 15, 20]
 num_trials: 30
-run_id: run_id_8
+run_id: run_id_9
 hp_configuration_ids: ["H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10"]
 eta: 0
 
@@ -44,7 +44,6 @@ dataset:
   x_label: "x"
   y_label: "y"
   model:
-    # FashionMNIST uses this width; MNIST uses the fixed Opacus CNN.
     hidden_width: 120
     activation:
       scale: 2.0
@@ -72,6 +71,12 @@ dataset:
 privacy:
   delta: 1e-5
   max_renyi_order: 1000
+  sigma_search:
+    initial_sigma: ${run_settings.noise_multiplier}
+    minimum_sigma: 1e-3
+    maximum_sigma: 1e3
+    relative_tolerance: 1e-6
+    max_iterations: 80
 
 evaluation:
   selection:

@@ -1,6 +1,6 @@
 defaults:
-  - experiment: exp2_compute_matched_utility_central
-  - hp_candidate_set: mnist_learning_rate
+  - experiment: exp3_privacy_matched_utility_central
+  - hp_candidate_set: fashionmnist_learning_rate
   - _self_
 
 paths:

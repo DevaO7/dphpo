@@ -1,12 +1,19 @@
 """Result metadata shared by federated and centralized HPO experiments."""
 import csv
+import json
 import math
 from pathlib import Path
 import copy
 import numpy as np
+import matplotlib.pyplot as plt
+
 from .planning import (
     PLAN_FILENAMES,
     generate_stage_2_plan,
+    get_privacy_matched_plan_directory,
+    get_privacy_matched_simulations_directory,
+    load_stage_2_plan,
+    load_privacy_matched_simulation_plan,
     load_simulation_plan,
     map_stage_1_plan_runs,
 )
@@ -182,7 +189,106 @@ def load_compilation_plan(config, method):
             f"Plan {plan_filename} has method "
             f"{plan.get('method')!r}, expected {method!r}."
         )
+    metadata_checks = {
+        "run_id": str(config.run_id),
+        "plan_seed": int(config.seed),
+        "hp_configuration_ids": [
+            str(hp_id) for hp_id in config.hp_configuration_ids
+        ],
+        "eta": float(config.eta),
+    }
+    for key, expected_value in metadata_checks.items():
+        if plan.get(key) != expected_value:
+            raise ValueError(
+                f"Compilation plan {plan_filename} has {key}="
+                f"{plan.get(key)!r}, but the experiment requires "
+                f"{expected_value!r}. Regenerate the plan or restore "
+                "the matching experiment configuration."
+            )
+    points = plan.get("points")
+    if (
+        not isinstance(points, list)
+        or len(points) != len(config.base_E_K_list)
+    ):
+        raise ValueError(
+            f"Compilation plan {plan_filename} does not match the "
+            "number of configured base_E_K_list points."
+        )
+    expected_num_trials = int(config.num_trials)
+    for point_index, point in enumerate(points):
+        trials = point.get("trials") if isinstance(point, dict) else None
+        if (
+            not isinstance(trials, list)
+            or len(trials) != expected_num_trials
+        ):
+            raise ValueError(
+                f"Compilation plan {plan_filename} point "
+                f"{point_index} does not contain the configured "
+                f"{expected_num_trials} trials."
+            )
     return plan
+
+
+def validate_compilation_metric_files(config, plans):
+    """Fail once with all missing metric artifacts for both methods."""
+    simulations_root = get_compilation_paths(config)["simulations_root"]
+    missing_paths = set()
+    for method, plan in plans.items():
+        execution_summary = plan.get("execution_summary")
+        if not isinstance(execution_summary, dict):
+            raise ValueError(
+                f"The {method} compilation plan has no execution summary."
+            )
+        specs = execution_summary.get("required_stage_2_run_specs")
+        if not isinstance(specs, list) or not specs:
+            raise ValueError(
+                f"The {method} compilation plan has no required "
+                "Stage-2 run specifications."
+            )
+        for spec_index, spec in enumerate(specs):
+            if not isinstance(spec, dict):
+                raise ValueError(
+                    f"The {method} Stage-2 run specification "
+                    f"{spec_index} is invalid."
+                )
+            try:
+                stage_1_directory = str(
+                    spec["stage_1_run_directory"]
+                )
+                stage_2_directory = str(
+                    spec["stage_2_run_directory"]
+                )
+            except KeyError as error:
+                raise ValueError(
+                    f"The {method} Stage-2 run specification "
+                    f"{spec_index} is missing {error.args[0]!r}."
+                ) from error
+            stage_1_path = (
+                simulations_root / stage_1_directory / "stage_1.csv"
+            )
+            stage_2_path = (
+                simulations_root / stage_2_directory / "stage_2.csv"
+            )
+            if not stage_1_path.is_file():
+                missing_paths.add(stage_1_path)
+            if not stage_2_path.is_file():
+                missing_paths.add(stage_2_path)
+
+    if missing_paths:
+        ordered_paths = sorted(str(path) for path in missing_paths)
+        display_limit = 20
+        displayed_paths = ordered_paths[:display_limit]
+        remainder = len(ordered_paths) - len(displayed_paths)
+        details = "\n".join(
+            f"  - {path}" for path in displayed_paths
+        )
+        if remainder:
+            details += f"\n  - ... and {remainder} more"
+        raise FileNotFoundError(
+            "Cannot compile both HPO methods because "
+            f"{len(ordered_paths)} required metric files are missing:\n"
+            f"{details}"
+        )
 
 
 
@@ -293,6 +399,7 @@ def get_compiled_evaluation_metadata(
     evaluation,
     stage_1_end,
     stage_2_end,
+    evaluation_interval=1,
 ):
     return {
         "selection": {
@@ -305,6 +412,7 @@ def get_compiled_evaluation_metadata(
             "at": evaluation["utility_at"],
         },
         "trajectory": {
+            "evaluation_interval": int(evaluation_interval),
             "stage_1_rounds": [0, stage_1_end - 1],
             "stage_2_rounds": [
                 stage_1_end,
@@ -549,6 +657,7 @@ def score_complete_run(
     stage_1_end,
     stage_2_end,
     score_cache,
+    evaluation_interval=1,
 ):
     stage_1_directory = str(
         run["stage_1_run_directory"]
@@ -562,6 +671,7 @@ def score_complete_run(
         evaluation["selection_metric"],
         evaluation["evaluation_mode"],
         tuple(evaluation["utility_metrics"]),
+        int(evaluation_interval),
     )
 
     if cache_key not in score_cache:
@@ -582,12 +692,14 @@ def score_complete_run(
                     "csv_path": stage_1_metrics_path,
                     "expected_start_round": 0,
                     "expected_final_round": stage_1_end - 1,
+                    "evaluation_interval": evaluation_interval,
                 },
                 {
                     "stage": 2,
                     "csv_path": stage_2_metrics_path,
                     "expected_start_round": stage_1_end,
                     "expected_final_round": stage_2_end - 1,
+                    "evaluation_interval": evaluation_interval,
                 },
             ],
             selection_metric=evaluation["selection_metric"],
@@ -764,6 +876,7 @@ def compile_papernot_results(
     plan,
     evaluation,
     stage_compute_schedule,
+    evaluation_interval=1,
 ):
     result = copy.deepcopy(plan)
     result["result_type"] = "compiled_hpo_results"
@@ -771,6 +884,7 @@ def compile_papernot_results(
         evaluation=evaluation,
         stage_1_end=int(config.simulation.stage_1_end),
         stage_2_end=int(config.simulation.stage_2_end),
+        evaluation_interval=evaluation_interval,
     )
     simulations_root = get_compilation_paths(config)[
         "simulations_root"
@@ -792,6 +906,7 @@ def compile_papernot_results(
                     stage_1_end=stage_1_end,
                     stage_2_end=stage_2_end,
                     score_cache=score_cache,
+                    evaluation_interval=evaluation_interval,
                 )
                 for run in trial["sampled_stage_2_runs"]
             ]
@@ -841,12 +956,210 @@ def build_stage_2_spec_lookup(plan):
         lookup[run_directory] = dict(spec)
     return lookup
 
+def save_trial_result_rows(rows, csv_path):
+    if not rows:
+        raise ValueError("No trial result rows were compiled.")
+    csv_path = Path(csv_path)
+    temporary_path = csv_path.with_suffix(
+        f"{csv_path.suffix}.tmp"
+    )
+    try:
+        with temporary_path.open(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=list(rows[0]),
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+        temporary_path.replace(csv_path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+def plot_expected_compute_utility(
+    rows,
+    output_directory,
+    compute_axis_label=(
+        "Expected compute (communication rounds × local updates)"
+    ),
+):
+    method_labels = {
+        "papernot_baseline": "Papernot baseline",
+        "two_stage_tuning": "Two-stage tuning",
+    }
+    utility_metrics = sorted(
+        {row["utility_metric"] for row in rows}
+    )
+    plot_paths = []
+
+    for utility_metric in utility_metrics:
+        figure, axis = plt.subplots(figsize=(7, 5))
+        for method in RESULT_FILENAMES:
+            method_rows = [
+                row
+                for row in rows
+                if row["method"] == method
+                and row["utility_metric"] == utility_metric
+            ]
+            values_by_compute = {}
+            for row in method_rows:
+                values_by_compute.setdefault(
+                    float(row["expected_compute"]),
+                    [],
+                ).append(float(row["utility_score"]))
+
+            expected_compute_values = sorted(values_by_compute)
+            means = []
+            ci95_half_widths = []
+            for expected_compute in expected_compute_values:
+                values = np.asarray(
+                    values_by_compute[expected_compute],
+                    dtype=float,
+                )
+                standard_deviation = (
+                    float(np.std(values, ddof=1))
+                    if values.size > 1
+                    else 0.0
+                )
+                means.append(float(np.mean(values)))
+                ci95_half_widths.append(
+                    1.96
+                    * standard_deviation
+                    / np.sqrt(values.size)
+                )
+
+            means = np.asarray(means, dtype=float)
+            ci95_half_widths = np.asarray(
+                ci95_half_widths,
+                dtype=float,
+            )
+            mean_line, = axis.plot(
+                expected_compute_values,
+                means,
+                marker="o",
+                label=method_labels[method],
+            )
+            axis.fill_between(
+                expected_compute_values,
+                means - ci95_half_widths,
+                means + ci95_half_widths,
+                color=mean_line.get_color(),
+                alpha=0.2,
+                linewidth=0,
+            )
+
+        axis.set_xlabel(str(compute_axis_label))
+        axis.set_ylabel(
+            utility_metric.replace("_", " ").title()
+        )
+        axis.set_title(
+            f"{utility_metric.replace('_', ' ').title()} "
+            "vs Expected Compute"
+        )
+        axis.grid(alpha=0.25)
+        axis.legend()
+        figure.tight_layout()
+        plot_path = (
+            output_directory
+            / f"expected_compute_vs_{utility_metric}.png"
+        )
+        figure.savefig(plot_path, dpi=300)
+        plt.close(figure)
+        plot_paths.append(plot_path)
+
+    return plot_paths
+
+def build_trial_result_rows(compiled_results):
+    rows = []
+    for method, result in compiled_results.items():
+        utility_metrics = result["evaluation"]["utility"][
+            "metrics"
+        ]
+        for point_index, point in enumerate(result["points"]):
+            for trial_index, trial in enumerate(point["trials"]):
+                selected_run = trial["final_selected_run"]
+                if method == "papernot_baseline":
+                    stage_1_E_K = point["E_K"]
+                    stage_2_E_K = point["E_K"]
+                    stage_1_sampled_K = trial["sampled_K"]
+                    stage_2_sampled_K = trial["sampled_K"]
+                else:
+                    stage_1_E_K = point["stage_1_E_K"]
+                    stage_2_E_K = point["stage_2_E_K"]
+                    stage_1_sampled_K = trial[
+                        "trial_stage_1"
+                    ]["sampled_K"]
+                    stage_2_sampled_K = trial[
+                        "trial_stage_2"
+                    ]["sampled_K"]
+
+                for utility_metric in utility_metrics:
+                    rows.append(
+                        {
+                            "method": method,
+                            "point_index": point_index,
+                            "trial": int(
+                                trial.get("trial", trial_index)
+                            ),
+                            "expected_compute": point[
+                                "expected_compute"
+                            ],
+                            "stage_1_E_K": stage_1_E_K,
+                            "stage_2_E_K": stage_2_E_K,
+                            "stage_1_sampled_K": (
+                                stage_1_sampled_K
+                            ),
+                            "stage_2_sampled_K": (
+                                stage_2_sampled_K
+                            ),
+                            "hp_configuration_id": selected_run[
+                                "hp_configuration_id"
+                            ],
+                            "stage_1_run_index": selected_run[
+                                "stage_1_run_index"
+                            ],
+                            "continuation_index": selected_run[
+                                "continuation_index"
+                            ],
+                            "selection_metric": selected_run[
+                                "selection"
+                            ]["metric"],
+                            "selection_mode": selected_run[
+                                "selection"
+                            ]["mode"],
+                            "selection_stage": selected_run[
+                                "selection"
+                            ]["stage"],
+                            "selection_round": selected_run[
+                                "selection"
+                            ]["round"],
+                            "selection_score": selected_run[
+                                "selection"
+                            ]["score"],
+                            "utility_metric": utility_metric,
+                            "utility_score": selected_run[
+                                "utility"
+                            ][utility_metric],
+                            "stage_1_metrics_path": selected_run[
+                                "stage_1_metrics_path"
+                            ],
+                            "stage_2_metrics_path": selected_run[
+                                "stage_2_metrics_path"
+                            ],
+                        }
+                    )
+    return rows
 
 def compile_two_stage_results(
     config,
     plan,
     evaluation,
     stage_compute_schedule,
+    evaluation_interval=1,
 ):
     result = copy.deepcopy(plan)
     result["result_type"] = "compiled_hpo_results"
@@ -854,6 +1167,7 @@ def compile_two_stage_results(
         evaluation=evaluation,
         stage_1_end=int(config.simulation.stage_1_end),
         stage_2_end=int(config.simulation.stage_2_end),
+        evaluation_interval=evaluation_interval,
     )
     simulations_root = get_compilation_paths(config)[
         "simulations_root"
@@ -901,6 +1215,7 @@ def compile_two_stage_results(
                         stage_1_end=stage_1_end,
                         stage_2_end=stage_2_end,
                         score_cache=score_cache,
+                        evaluation_interval=evaluation_interval,
                     )
                 )
 
@@ -935,6 +1250,147 @@ def compile_two_stage_results(
     return result
 
 
+def _save_json_atomically(value, path):
+    path = Path(path)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    try:
+        with temporary_path.open(
+            mode="w",
+            encoding="utf-8",
+        ) as file:
+            encoder = json.JSONEncoder(
+                indent=4,
+                allow_nan=False,
+            )
+            pending_characters = 0
+            for chunk in encoder.iterencode(value):
+                file.write(chunk)
+                pending_characters += len(chunk)
+                if pending_characters >= 1_000_000:
+                    file.flush()
+                    pending_characters = 0
+        temporary_path.replace(path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+def compile_experiment_results(
+    config,
+    *,
+    stage_compute_schedule,
+    evaluation_interval=1,
+    compute_axis_label=(
+        "Expected compute (communication rounds × local updates)"
+    ),
+):
+    """Compile both HPO methods and persist trial-level artifacts."""
+    if (
+        isinstance(evaluation_interval, bool)
+        or not isinstance(evaluation_interval, (int, np.integer))
+        or int(evaluation_interval) <= 0
+    ):
+        raise ValueError(
+            "evaluation_interval must be a positive integer; got "
+            f"{evaluation_interval!r}."
+        )
+    evaluation_interval = int(evaluation_interval)
+    stage_compute_schedule = np.asarray(
+        stage_compute_schedule,
+        dtype=float,
+    )
+    if (
+        stage_compute_schedule.shape != (2,)
+        or not np.all(np.isfinite(stage_compute_schedule))
+        or np.any(stage_compute_schedule <= 0.0)
+    ):
+        raise ValueError(
+            "stage_compute_schedule must contain two finite, positive "
+            "stage costs."
+        )
+    stage_compute_schedule = stage_compute_schedule.tolist()
+
+    evaluation = get_evaluation_settings(config)
+    paths = get_compilation_paths(config)
+    plans = {
+        method: load_compilation_plan(config, method)
+        for method in RESULT_FILENAMES
+    }
+    validate_compilation_metric_files(config, plans)
+    compiled_results = {
+        "papernot_baseline": compile_papernot_results(
+            config=config,
+            plan=plans["papernot_baseline"],
+            evaluation=evaluation,
+            stage_compute_schedule=stage_compute_schedule,
+            evaluation_interval=evaluation_interval,
+        ),
+        "two_stage_tuning": compile_two_stage_results(
+            config=config,
+            plan=plans["two_stage_tuning"],
+            evaluation=evaluation,
+            stage_compute_schedule=stage_compute_schedule,
+            evaluation_interval=evaluation_interval,
+        ),
+    }
+
+    papernot_compute = np.asarray(
+        [
+            point["expected_compute"]
+            for point in compiled_results["papernot_baseline"]["points"]
+        ],
+        dtype=float,
+    )
+    two_stage_compute = np.asarray(
+        [
+            point["expected_compute"]
+            for point in compiled_results["two_stage_tuning"]["points"]
+        ],
+        dtype=float,
+    )
+    if (
+        papernot_compute.shape != two_stage_compute.shape
+        or not np.allclose(
+            papernot_compute,
+            two_stage_compute,
+            rtol=1e-12,
+            atol=1e-9,
+        )
+    ):
+        raise ValueError(
+            "Papernot and two-stage plans do not have matching "
+            "expected-compute coordinates. Regenerate both plans."
+        )
+
+    compiled_root = paths["compiled_root"]
+    compiled_root.mkdir(parents=True, exist_ok=True)
+    result_paths = {}
+    for method, result in compiled_results.items():
+        plan_path = paths["plan_root"] / PLAN_FILENAMES[method][2]
+        result["source_plan_path"] = str(plan_path)
+        result_path = compiled_root / RESULT_FILENAMES[method]
+        _save_json_atomically(result, result_path)
+        result_paths[method] = result_path
+
+    trial_rows = build_trial_result_rows(compiled_results)
+    trial_csv_path = compiled_root / "trial_results.csv"
+    save_trial_result_rows(
+        rows=trial_rows,
+        csv_path=trial_csv_path,
+    )
+    plot_paths = plot_expected_compute_utility(
+        rows=trial_rows,
+        output_directory=compiled_root,
+        compute_axis_label=compute_axis_label,
+    )
+
+    return {
+        "result_paths": result_paths,
+        "trial_csv_path": trial_csv_path,
+        "plot_paths": plot_paths,
+    }
+
+
 def load_stage_1_metric(
     csv_path,
     metric,
@@ -966,6 +1422,7 @@ def record_stage_1_run_scores(
     stage_1_plan,
     config,
     evaluation_interval=1,
+    simulations_root=None,
 ):
     evaluation = get_evaluation_settings(config)
     metric = evaluation["selection_metric"]
@@ -1000,12 +1457,15 @@ def record_stage_1_run_scores(
         "evaluation_interval": evaluation_interval,
     }
 
-    simulations_root = (
-        Path(config.output.results_root)
-        / str(config.name)
-        / str(config.run_id)
-        / "simulations"
-    )
+    if simulations_root is None:
+        simulations_root = (
+            Path(config.output.results_root)
+            / str(config.name)
+            / str(config.run_id)
+            / "simulations"
+        )
+    else:
+        simulations_root = Path(simulations_root)
     score_cache = {}
 
     for point in stage_1_plan["points"]:
@@ -1073,3 +1533,61 @@ def generate_stage_2_plan_from_results(
         seed=config.seed,
     )
     return generate_stage_2_plan(stage_1_plan, config)
+
+
+def generate_privacy_matched_stage_2_plan_from_results(
+    config,
+    *,
+    evaluation_interval=1,
+):
+    """Generate one nested Stage-2 plan from a completed Stage 1."""
+    exp_config = config.experiment
+    method = str(exp_config.simulation.method)
+    if method != "two_stage_tuning":
+        raise ValueError(
+            "Privacy-matched Stage-2 plan generation requires "
+            "simulation.method='two_stage_tuning'."
+        )
+
+    target_epsilon = float(
+        exp_config.simulation.target_epsilon
+    )
+    E_k = float(exp_config.simulation.mu)
+    two_stage_settings = get_two_stage_settings(exp_config)
+    stage_1_plan = load_privacy_matched_simulation_plan(
+        config,
+        stage=1,
+    )
+    stage_1_plan = map_stage_1_plan_runs(
+        stage_1_plan,
+        exp_config.hp_configuration_ids,
+    )
+    stage_1_plan = record_stage_1_run_scores(
+        stage_1_plan,
+        exp_config,
+        evaluation_interval=evaluation_interval,
+        simulations_root=(
+            get_privacy_matched_simulations_directory(
+                config=config,
+                method=method,
+                target_epsilon=target_epsilon,
+                E_k=E_k,
+            )
+        ),
+    )
+    stage_1_plan = select_top_m_stage_1_runs(
+        stage_1_plan,
+        m=two_stage_settings.num_survivors,
+        mode=stage_1_plan["evaluation"]["selection_mode"],
+        seed=exp_config.seed,
+    )
+    return generate_stage_2_plan(
+        stage_1_plan,
+        exp_config,
+        plan_directory=get_privacy_matched_plan_directory(
+            config=config,
+            method=method,
+            target_epsilon=target_epsilon,
+            E_k=E_k,
+        ),
+    )

@@ -9,20 +9,25 @@ from hpo.execution import (
     get_selected_learning_rate,
     save_run_spec,
     validate_simulation_stage,
+    validate_privacy_order_search,
 )
 from hpo.planning import (
     PLAN_FILENAMES,
     generate_plan,
+    generate_privacy_matched_plan,
+    get_privacy_matched_simulations_directory,
     get_required_simulation_run_specs,
+    load_privacy_matched_simulation_plan,
     load_simulation_plan,
 )
 from hpo.results import (
     RESULT_FILENAMES,
     build_privacy_compute_points,
+    compile_experiment_results,
+    generate_privacy_matched_stage_2_plan_from_results,
+    generate_stage_2_plan_from_results,
     get_compilation_paths,
     save_privacy_compute_rows,
-    validate_privacy_order_search,
-    generate_stage_2_plan_from_results,
 )
 from utils.hpo_config import get_two_stage_settings
 from central.data import get_data_loaders
@@ -472,7 +477,28 @@ def plot_privacy_compute_plot(config):
 
 
 
-def run_planned_simulations(config, stage):
+def _config_with_plan_noise_multiplier(config, simulation_plan):
+    """Copy the config and install the plan-calibrated noise value."""
+    points = simulation_plan.get("points")
+    if not isinstance(points, list) or len(points) != 1:
+        raise ValueError(
+            "A privacy-matched simulation plan must contain exactly "
+            "one point."
+        )
+    noise_multiplier = float(points[0]["noise_multiplier"])
+    if not np.isfinite(noise_multiplier) or noise_multiplier <= 0.0:
+        raise ValueError(
+            "The plan noise_multiplier must be finite and positive."
+        )
+
+    effective_config = OmegaConf.create(
+        OmegaConf.to_container(config, resolve=True)
+    )
+    effective_config.run_settings.noise_multiplier = noise_multiplier
+    return effective_config
+
+
+def run_planned_simulations(config, stage, *, privacy_matched=False):
     validate_simulation_stage(config, stage)
     if (
         bool(config.run_settings.dp)
@@ -484,11 +510,36 @@ def run_planned_simulations(config, stage):
             "run_settings.data_sampling_scheme='poisson_sampling' so "
             "training matches the privacy accountant."
         )
-    exp_config = config.experiment
-    simulation_plan = load_simulation_plan(
-        exp_config,
-        stage=stage,
-    )
+    if privacy_matched:
+        simulation_plan = load_privacy_matched_simulation_plan(
+            config,
+            stage=stage,
+        )
+        execution_config = _config_with_plan_noise_multiplier(
+            config,
+            simulation_plan,
+        )
+        exp_config = execution_config.experiment
+        simulations_root = get_privacy_matched_simulations_directory(
+            config=execution_config,
+            method=str(exp_config.simulation.method),
+            target_epsilon=float(
+                exp_config.simulation.target_epsilon
+            ),
+            E_k=float(exp_config.simulation.mu),
+        )
+    else:
+        execution_config = config
+        exp_config = execution_config.experiment
+        simulation_plan = load_simulation_plan(
+            exp_config,
+            stage=stage,
+        )
+        simulations_root = (
+            Path(HydraConfig.get().runtime.output_dir)
+            / "simulations"
+        )
+
     required_run_specs = get_required_simulation_run_specs(
         simulation_plan,
         stage=stage,
@@ -496,13 +547,15 @@ def run_planned_simulations(config, stage):
             exp_config.simulation.run_hp_configuration
         ),
     )
-    step_size = get_selected_learning_rate(config)
-    simulations_root = (
-        Path(HydraConfig.get().runtime.output_dir)
-        / "simulations"
-    )
+    step_size = get_selected_learning_rate(execution_config)
 
     num_required_runs = len(required_run_specs)
+    if privacy_matched:
+        print(
+            "Using plan-calibrated noise_multiplier="
+            f"{execution_config.run_settings.noise_multiplier}",
+            flush=True,
+        )
     print(
         f"Stage {stage} {exp_config.simulation.run_hp_configuration}: "
         f"{num_required_runs} plan-defined runs",
@@ -532,14 +585,14 @@ def run_planned_simulations(config, stage):
             save_path=save_path,
             stage=stage,
             signature=_training_signature(
-                config=config,
+                config=execution_config,
                 stage=stage,
                 run_spec=run_spec,
                 learning_rate=step_size,
             ),
         )
         OmegaConf.save(
-            config,
+            execution_config,
             save_path / f"stage_{stage}_config.yaml",
             resolve=True,
         )
@@ -551,14 +604,14 @@ def run_planned_simulations(config, stage):
                 / run_spec["stage_1_run_directory"]
             )
             _validate_stage_1_source_signature(
-                config=config,
+                config=execution_config,
                 run_spec=run_spec,
                 learning_rate=step_size,
                 stage_1_source_path=stage_1_source_path,
             )
 
         train_data_loader, test_data_loader = get_data_loaders(
-            config,
+            execution_config,
             seed=base_seed,
         )
 
@@ -566,27 +619,37 @@ def run_planned_simulations(config, stage):
             model=build_model(exp_config.dataset),
             train_data_loader=train_data_loader,
             test_data_loader=test_data_loader,
-            num_iters=config.run_settings.rounds,
+            num_iters=execution_config.run_settings.rounds,
             save_path=save_path,
-            loss_fn_name=config.experiment.dataset.loss_fn,
+            loss_fn_name=execution_config.experiment.dataset.loss_fn,
             learning_rate=step_size,
-            weight_decay=config.run_settings.weight_decay,
-            use_cuda=config.run_settings.use_cuda,
-            dp=config.run_settings.dp,
-            sample_rate=config.run_settings.sampling_rate,
-            noise_multiplier=config.run_settings.noise_multiplier,
-            max_grad_norm=config.run_settings.max_grad_norm,
-            x_label=config.experiment.dataset.x_label,
-            y_label=config.experiment.dataset.y_label,
-            data_sampling_scheme=config.run_settings.data_sampling_scheme,
+            weight_decay=execution_config.run_settings.weight_decay,
+            use_cuda=execution_config.run_settings.use_cuda,
+            dp=execution_config.run_settings.dp,
+            sample_rate=execution_config.run_settings.sampling_rate,
+            noise_multiplier=(
+                execution_config.run_settings.noise_multiplier
+            ),
+            max_grad_norm=execution_config.run_settings.max_grad_norm,
+            x_label=execution_config.experiment.dataset.x_label,
+            y_label=execution_config.experiment.dataset.y_label,
+            data_sampling_scheme=(
+                execution_config.run_settings.data_sampling_scheme
+            ),
             stage=stage,
-            stage_1_end=config.experiment.simulation.stage_1_end,
+            stage_1_end=(
+                execution_config.experiment.simulation.stage_1_end
+            ),
             base_seed=base_seed,
             stage_1_source_path=stage_1_source_path,
-            optimizer_name=config.run_settings.optimizer_name,
-            momentum=config.run_settings.momentum,
-            checkpoint_interval=config.run_settings.checkpoint_interval,
-            evaluation_interval=config.run_settings.evaluation_interval,
+            optimizer_name=execution_config.run_settings.optimizer_name,
+            momentum=execution_config.run_settings.momentum,
+            checkpoint_interval=(
+                execution_config.run_settings.checkpoint_interval
+            ),
+            evaluation_interval=(
+                execution_config.run_settings.evaluation_interval
+            ),
         )
         central_trainer.train()
         print(
@@ -639,14 +702,6 @@ def calculate_E_K_given_compute_for_papernot(compute, stage_compute_schedule):
 def utility_compute_plot(config: DictConfig) -> None:
     exp_config = config.experiment
     two_stage_settings = get_two_stage_settings(exp_config)
-
-    if exp_config.run_mode.compile_result:
-        raise NotImplementedError(
-            "Central result compilation is not implemented yet. Do not "
-            "enable experiment.run_mode.compile_result until the central "
-            "trial compiler is available."
-        )
-
     if exp_config.run_mode.generate_stage_1_plan:
         stage_compute_schedule = get_stage_compute_schedule(
             exp_config
@@ -710,10 +765,91 @@ def utility_compute_plot(config: DictConfig) -> None:
         )
 
     if exp_config.run_mode.compile_result:
-        pass
+        outputs = compile_experiment_results(
+            exp_config,
+            stage_compute_schedule=get_stage_compute_schedule(
+                exp_config
+            ),
+            evaluation_interval=int(
+                config.run_settings.evaluation_interval
+            ),
+            compute_axis_label=(
+                "Expected compute (optimizer updates)"
+            ),
+        )
+        print(
+            f"Compiled central results: {outputs['trial_csv_path']}",
+            flush=True,
+        )
+
+
+def utility_privacy_plot(config: DictConfig) -> None:
+    exp_config = config.experiment
+    method = str(exp_config.simulation.method)
+    E_k = float(exp_config.simulation.mu)
+    target_epsilon = float(
+        exp_config.simulation.target_epsilon
+    )
+
+    if exp_config.run_mode.generate_stage_1_plan:
+        plan_path = generate_privacy_matched_plan(
+            config=config,
+            method=method,
+            target_epsilon=target_epsilon,
+            E_k=E_k,
+        )
+        print(
+            f"Generated privacy-matched Stage-1 plan: {plan_path}",
+            flush=True,
+        )
+
+    if exp_config.run_mode.run_simulation_stage_1:
+        run_planned_simulations(
+            config,
+            stage=1,
+            privacy_matched=True,
+        )
+
+    if exp_config.run_mode.generate_stage_2_plan:
+        plan_path = (
+            generate_privacy_matched_stage_2_plan_from_results(
+                config,
+                evaluation_interval=int(
+                    config.run_settings.evaluation_interval
+                ),
+            )
+        )
+        print(
+            "Generated privacy-matched Stage-2 plan: "
+            f"{plan_path}",
+            flush=True,
+        )
+
+    if exp_config.run_mode.run_simulation_stage_2:
+        run_planned_simulations(
+            config,
+            stage=2,
+            privacy_matched=True,
+        )
+
+    unsupported_checkpoints = [
+        checkpoint
+        for checkpoint in (
+            "compile_result",
+        )
+        if bool(exp_config.run_mode.get(checkpoint, False))
+    ]
+    if unsupported_checkpoints:
+        raise NotImplementedError(
+            "The privacy-matched runner does not implement these "
+            "checkpoints yet: "
+            f"{', '.join(unsupported_checkpoints)}."
+        )
+
 
 EXPERIMENT_RUNNERS = {
     "utility_compute_plot": utility_compute_plot,
+    "utility_privacy_plot": utility_privacy_plot,
 }
 
 

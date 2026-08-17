@@ -143,3 +143,18 @@ def get_selected_learning_rate(config: DictConfig) -> float:
         )
 
     return learning_rate
+
+
+def validate_privacy_order_search(dp_result, method, expected_compute):
+    if dp_result.is_at_min_order or dp_result.is_at_max_order:
+        boundary = (
+            "minimum"
+            if dp_result.is_at_min_order
+            else "maximum"
+        )
+        raise RuntimeError(
+            f"The optimal Rényi order for {method} at expected "
+            f"compute {expected_compute} is the {boundary} stored "
+            f"order ({dp_result.best_order}). Expand the configured "
+            "Rényi-order range before reporting epsilon."
+        )
