@@ -4,25 +4,38 @@ runner: utility_privacy_plot
 seed: 1
 
 simulation:
-  method: papernot_baseline
+  method: two_stage_poisson_tuning
   run_hp_configuration: H2
   stage: 2
   stage_1_end: 2000
   stage_2_end: 5000
   mu: 10
-  target_epsilon: 0.9
+  target_epsilon: 2.3
 
 run_mode:
-  generate_stage_1_plan: true
+  generate_stage_1_plan: false
   generate_stage_2_plan: false
   run_simulation_stage_1: false
   run_simulation_stage_2: false
-  compile_result: false
+  compile_result: true
+
+compilation:
+  targets: [utility_privacy]
+  methods:
+    - papernot_poisson_baseline
+    - two_stage_tuning
+    - two_stage_poisson_tuning
+  target_epsilons: [0.2, 0.9, 1.6, 2.3, 3.0]
+  target_mus: [5, 7, 10, 15, 20]
 
 num_trials: 30
-run_id: run_id_9
+run_id: run_id_10
 hp_configuration_ids: ["H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10"]
 eta: 0
+
+poisson:
+  # Public, data-independent model returned by the mechanism when K=0.
+  k_zero_model_seed: 2027
 
 two_stage:
   num_survivors: 3
@@ -43,6 +56,11 @@ dataset:
   loss_fn: CrossEntropyLoss
   x_label: "x"
   y_label: "y"
+  # The official public test split is divided once and identically for
+  # every trajectory. Validation drives HPO; held-out test reports utility.
+  public_evaluation_split:
+    validation_fraction: 0.5
+    seed: 2027
   model:
     hidden_width: 120
     activation:
@@ -80,12 +98,11 @@ privacy:
 
 evaluation:
   selection:
-    metric: train_loss
+    metric: validation_loss
     mode: min
+    peak_tie_break: earliest
   utility:
     metrics:
-      - train_loss
-      - train_accuracy
       - test_loss
       - test_accuracy
-    at: selection_round
+    at: selected_checkpoint

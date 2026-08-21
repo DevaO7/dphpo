@@ -13,24 +13,30 @@ from hpo.execution import (
 )
 from hpo.planning import (
     PLAN_FILENAMES,
+    TWO_STAGE_METHODS,
     generate_plan,
     generate_privacy_matched_plan,
     get_privacy_matched_simulations_directory,
     get_required_simulation_run_specs,
+    get_selection_signature,
     load_privacy_matched_simulation_plan,
     load_simulation_plan,
 )
 from hpo.results import (
-    RESULT_FILENAMES,
+    COMPUTE_MATCHED_METHOD_LABELS,
+    COMPUTE_MATCHED_RESULT_FILENAMES,
     build_privacy_compute_points,
     compile_experiment_results,
+    compile_privacy_matched_results,
     generate_privacy_matched_stage_2_plan_from_results,
     generate_stage_2_plan_from_results,
+    get_compute_matched_methods,
     get_compilation_paths,
     save_privacy_compute_rows,
 )
 from utils.hpo_config import get_two_stage_settings
 from central.data import get_data_loaders
+from central.evaluation import HeldoutCheckpointEvaluator
 from central.model import build_model
 from central.trainer import CentralTrainer
 import matplotlib.pyplot as plt
@@ -41,11 +47,13 @@ from privacy_accounting.rdp_utils import (
 )
 from privacy_accounting.selection_accounting import (
     compute_top1_rdp,
+    compute_top1_rdp_poisson,
     compute_two_stage_rdp,
+    compute_two_stage_rdp_poisson,
 )
 def _training_signature(config, stage, run_spec, learning_rate):
     """Return metadata that must match when a run is resumed or reused."""
-    return {
+    signature = {
         "schema_version": 1,
         "stage": int(stage),
         "base_seed": int(run_spec[f"stage_{stage}_base_seed"]),
@@ -61,6 +69,18 @@ def _training_signature(config, stage, run_spec, learning_rate):
             resolve=True,
         ),
     }
+    utility_at = str(
+        config.experiment.evaluation.utility.get(
+            "at",
+            "selection_round",
+        )
+    ).strip().lower()
+    if utility_at == "selected_checkpoint":
+        signature["schema_version"] = 2
+        signature["selection_signature"] = get_selection_signature(
+            config
+        )
+    return signature
 
 
 def _save_or_validate_training_signature(
@@ -148,9 +168,11 @@ def load_compiled_privacy_compute_points(config):
     """Load privacy coordinates from compiled output for validation only."""
     paths = get_compilation_paths(config)
     stage_compute_schedule = get_stage_compute_schedule(config)
+    methods = get_compute_matched_methods(config)
     compiled_results = {}
 
-    for method, filename in RESULT_FILENAMES.items():
+    for method in methods:
+        filename = COMPUTE_MATCHED_RESULT_FILENAMES[method]
         result_path = paths["compiled_root"] / filename
         if not result_path.is_file():
             raise FileNotFoundError(
@@ -174,117 +196,110 @@ def load_compiled_privacy_compute_points(config):
             )
         compiled_results[method] = result
 
-    papernot_result = compiled_results["papernot_baseline"]
-    two_stage_result = compiled_results["two_stage_tuning"]
-    papernot_points = []
-    for point_index, point in enumerate(
-        papernot_result["points"]
-    ):
-        expected_num_trials = float(point["E_K"])
-        expected_compute = float(point["expected_compute"])
-        calculated_compute = (
-            expected_num_trials * sum(stage_compute_schedule)
-        )
-        if not np.isclose(
-            expected_compute,
-            calculated_compute,
-            rtol=1e-12,
-            atol=1e-9,
-        ):
-            raise ValueError(
-                "Papernot compiled expected compute is inconsistent "
-                f"at point {point_index}: stored={expected_compute}, "
-                f"calculated={calculated_compute}."
-            )
-        papernot_points.append(
-            {
-                "point_index": point_index,
-                "expected_compute": expected_compute,
-                "expected_num_trials": expected_num_trials,
-            }
-        )
-
-    two_stage_points = []
-    for point_index, point in enumerate(
-        two_stage_result["points"]
-    ):
-        stage_1_expected_num_trials = float(
-            point["stage_1_E_K"]
-        )
-        stage_2_expected_num_trials = float(
-            point["stage_2_E_K"]
-        )
-        expected_compute = float(point["expected_compute"])
-        calculated_compute = (
-            stage_1_expected_num_trials
-            * stage_compute_schedule[0]
-            + stage_2_expected_num_trials
-            * stage_compute_schedule[1]
-        )
-        if not np.isclose(
-            expected_compute,
-            calculated_compute,
-            rtol=1e-12,
-            atol=1e-9,
-        ):
-            raise ValueError(
-                "Two-stage compiled expected compute is "
-                f"inconsistent at point {point_index}: "
-                f"stored={expected_compute}, "
-                f"calculated={calculated_compute}."
-            )
-        two_stage_points.append(
-            {
-                "point_index": point_index,
-                "expected_compute": expected_compute,
-                "stage_1_expected_num_trials": (
+    points_by_method = {}
+    for method, result in compiled_results.items():
+        method_points = []
+        for point_index, point in enumerate(result["points"]):
+            expected_compute = float(point["expected_compute"])
+            if method in TWO_STAGE_METHODS:
+                stage_1_expected_num_trials = float(
+                    point["stage_1_E_K"]
+                )
+                stage_2_expected_num_trials = float(
+                    point["stage_2_E_K"]
+                )
+                calculated_compute = (
                     stage_1_expected_num_trials
-                ),
-                "stage_2_expected_num_trials": (
-                    stage_2_expected_num_trials
-                ),
-            }
-        )
+                    * stage_compute_schedule[0]
+                    + stage_2_expected_num_trials
+                    * stage_compute_schedule[1]
+                )
+                method_point = {
+                    "point_index": point_index,
+                    "expected_compute": expected_compute,
+                    "stage_1_expected_num_trials": (
+                        stage_1_expected_num_trials
+                    ),
+                    "stage_2_expected_num_trials": (
+                        stage_2_expected_num_trials
+                    ),
+                }
+            else:
+                expected_num_trials = float(point["E_K"])
+                calculated_compute = expected_num_trials * sum(
+                    stage_compute_schedule
+                )
+                method_point = {
+                    "point_index": point_index,
+                    "expected_compute": expected_compute,
+                    "expected_num_trials": expected_num_trials,
+                }
+            if not np.isclose(
+                expected_compute,
+                calculated_compute,
+                rtol=1e-12,
+                atol=1e-9,
+            ):
+                raise ValueError(
+                    f"{method} compiled expected compute is inconsistent "
+                    f"at point {point_index}: stored={expected_compute}, "
+                    f"calculated={calculated_compute}."
+                )
+            method_points.append(method_point)
+        method_points.sort(key=lambda point: point["expected_compute"])
+        points_by_method[method] = method_points
 
-    papernot_points.sort(
-        key=lambda point: point["expected_compute"]
-    )
-    two_stage_points.sort(
-        key=lambda point: point["expected_compute"]
-    )
-    papernot_compute = np.asarray(
-        [point["expected_compute"] for point in papernot_points]
-    )
+    two_stage_points = points_by_method["two_stage_tuning"]
     two_stage_compute = np.asarray(
         [point["expected_compute"] for point in two_stage_points]
     )
-    if (
-        papernot_compute.shape != two_stage_compute.shape
-        or not np.allclose(
-            papernot_compute,
-            two_stage_compute,
-            rtol=1e-12,
-            atol=1e-9,
+    for method, method_points in points_by_method.items():
+        method_compute = np.asarray(
+            [point["expected_compute"] for point in method_points]
         )
-    ):
-        raise ValueError(
-            "Papernot and two-stage compiled results do not use "
-            "matching expected-compute coordinates."
-        )
+        if (
+            method_compute.shape != two_stage_compute.shape
+            or not np.allclose(
+                method_compute,
+                two_stage_compute,
+                rtol=1e-12,
+                atol=1e-9,
+            )
+        ):
+            raise ValueError(
+                f"{method} and two_stage_tuning compiled results do not "
+                "use matching expected-compute coordinates."
+            )
 
     return {
-        "papernot_points": papernot_points,
+        "points_by_method": points_by_method,
+        "papernot_points": points_by_method.get(
+            "papernot_baseline",
+            [],
+        ),
+        "papernot_poisson_points": points_by_method.get(
+            "papernot_poisson_baseline",
+            [],
+        ),
         "two_stage_points": two_stage_points,
-        "papernot_eta": float(papernot_result["eta"]),
-        "two_stage_eta": float(two_stage_result["eta"]),
+        "papernot_eta": float(
+            compiled_results.get(
+                "papernot_baseline",
+                compiled_results["two_stage_tuning"],
+            )["eta"]
+        ),
+        "two_stage_eta": float(
+            compiled_results["two_stage_tuning"]["eta"]
+        ),
         "two_stage_top_m": int(
-            two_stage_result["stage_1_top_m"]
+            compiled_results["two_stage_tuning"]["stage_1_top_m"]
         ),
     }
 
 
 def plot_privacy_compute_plot(config):
     exp_config = config.experiment
+    methods = get_compute_matched_methods(exp_config)
     privacy_config = exp_config.privacy
     max_renyi_order = int(privacy_config.max_renyi_order)
     if max_renyi_order < 3:
@@ -340,93 +355,199 @@ def plot_privacy_compute_plot(config):
         get_stage_compute_schedule(exp_config),
     )
     privacy_rows = []
-    for point in privacy_points["papernot_points"]:
-        selection_result = compute_top1_rdp(
-            base_rdp_curve=papernot_base_curve,
-            expected_num_trials=point["expected_num_trials"],
-            eta=privacy_points["papernot_eta"],
-        )
-        dp_result = convert_rdp_to_approx_dp(
-            selection_result.rdp_curve,
-            delta=delta,
-        )
-        validate_privacy_order_search(
-            dp_result=dp_result,
-            method="papernot_baseline",
-            expected_compute=point["expected_compute"],
-        )
-        privacy_rows.append(
-            {
-                "method": "papernot_baseline",
-                "point_index": point["point_index"],
-                "expected_compute": point["expected_compute"],
-                "expected_num_trials": point[
-                    "expected_num_trials"
-                ],
-                "stage_1_expected_num_trials": "",
-                "stage_2_expected_num_trials": "",
-                "top_m": 1,
-                "eta": privacy_points["papernot_eta"],
-                "epsilon": dp_result.epsilon,
-                "delta": dp_result.delta,
-                "best_renyi_order": dp_result.best_order,
-                "is_at_min_order": dp_result.is_at_min_order,
-                "is_at_max_order": dp_result.is_at_max_order,
-                "min_renyi_order": int(orders[0]),
-                "max_renyi_order": int(orders[-1]),
-                "accounting_method": accounting_method,
-                **accounting_metadata,
+    for method in (
+        method
+        for method in methods
+        if method in {
+            "papernot_baseline",
+            "papernot_poisson_baseline",
+        }
+    ):
+        for point in privacy_points["papernot_points"]:
+            expected_num_trials = point["expected_num_trials"]
+            if method == "papernot_poisson_baseline":
+                selection_result = compute_top1_rdp_poisson(
+                    base_rdp_curve=papernot_base_curve,
+                    expected_num_trials=expected_num_trials,
+                )
+            else:
+                selection_result = compute_top1_rdp(
+                    base_rdp_curve=papernot_base_curve,
+                    expected_num_trials=expected_num_trials,
+                    eta=privacy_points["papernot_eta"],
+                )
+            dp_result = convert_rdp_to_approx_dp(
+                selection_result.rdp_curve,
+                delta=delta,
+            )
+            validate_privacy_order_search(
+                dp_result=dp_result,
+                method=method,
+                expected_compute=point["expected_compute"],
+            )
+            poisson_diagnostics = {
+                "theorem_source_order": "",
+                "hat_epsilon": "",
+                "hat_delta": "",
+                "best_auxiliary_renyi_order": "",
+                "raw_theorem_rdp_epsilon": "",
+                "enveloped_rdp_epsilon": "",
             }
-        )
+            if method == "papernot_poisson_baseline":
+                target_index = int(dp_result.best_index)
+                source_order = float(
+                    selection_result.envelope_source_orders[
+                        target_index
+                    ]
+                )
+                source_index = int(
+                    np.flatnonzero(
+                        np.isclose(
+                            selection_result.raw_rdp_curve.orders,
+                            source_order,
+                            rtol=0.0,
+                            atol=1e-12,
+                        )
+                    )[0]
+                )
+                poisson_diagnostics = {
+                    "theorem_source_order": source_order,
+                    "hat_epsilon": float(
+                        selection_result.hat_epsilons[source_index]
+                    ),
+                    "hat_delta": float(
+                        selection_result.hat_deltas[source_index]
+                    ),
+                    "best_auxiliary_renyi_order": float(
+                        selection_result.best_auxiliary_orders[
+                            source_index
+                        ]
+                    ),
+                    "raw_theorem_rdp_epsilon": float(
+                        selection_result.raw_rdp_curve.epsilons[
+                            source_index
+                        ]
+                    ),
+                    "enveloped_rdp_epsilon": float(
+                        selection_result.rdp_curve.epsilons[
+                            target_index
+                        ]
+                    ),
+                }
+            privacy_rows.append(
+                {
+                    "method": method,
+                    "point_index": point["point_index"],
+                    "expected_compute": point["expected_compute"],
+                    "expected_num_trials": expected_num_trials,
+                    "stage_1_expected_num_trials": "",
+                    "stage_2_expected_num_trials": "",
+                    "top_m": 1,
+                    "sampling_distribution": (
+                        "poisson"
+                        if method == "papernot_poisson_baseline"
+                        else "tnb"
+                    ),
+                    "eta": (
+                        ""
+                        if method == "papernot_poisson_baseline"
+                        else privacy_points["papernot_eta"]
+                    ),
+                    "probability_K_zero": (
+                        float(np.exp(-expected_num_trials))
+                        if method == "papernot_poisson_baseline"
+                        else 0.0
+                    ),
+                    "epsilon": dp_result.epsilon,
+                    "delta": dp_result.delta,
+                    "best_renyi_order": dp_result.best_order,
+                    "is_at_min_order": dp_result.is_at_min_order,
+                    "is_at_max_order": dp_result.is_at_max_order,
+                    "min_renyi_order": int(orders[0]),
+                    "max_renyi_order": int(orders[-1]),
+                    "accounting_method": accounting_method,
+                    **poisson_diagnostics,
+                    **accounting_metadata,
+                }
+            )
 
-    for point in privacy_points["two_stage_points"]:
-        selection_result = compute_two_stage_rdp(
-            stage_1_base_rdp_curve=low_resource_curve,
-            stage_2_base_rdp_curve=high_resource_curve,
-            m=privacy_points["two_stage_top_m"],
-            expected_num_trials_stage_1=point[
-                "stage_1_expected_num_trials"
-            ],
-            expected_num_trials_stage_2=point[
-                "stage_2_expected_num_trials"
-            ],
-            eta_stage_1=privacy_points["two_stage_eta"],
-            eta_stage_2=privacy_points["two_stage_eta"],
-        )
-        dp_result = convert_rdp_to_approx_dp(
-            selection_result.rdp_curve,
-            delta=delta,
-        )
-        validate_privacy_order_search(
-            dp_result=dp_result,
-            method="two_stage_tuning",
-            expected_compute=point["expected_compute"],
-        )
-        privacy_rows.append(
-            {
-                "method": "two_stage_tuning",
-                "point_index": point["point_index"],
-                "expected_compute": point["expected_compute"],
-                "expected_num_trials": "",
-                "stage_1_expected_num_trials": point[
+    for method in (
+        method
+        for method in methods
+        if method in TWO_STAGE_METHODS
+    ):
+        for point in privacy_points["two_stage_points"]:
+            common_arguments = {
+                "stage_1_base_rdp_curve": low_resource_curve,
+                "stage_2_base_rdp_curve": high_resource_curve,
+                "m": privacy_points["two_stage_top_m"],
+                "expected_num_trials_stage_1": point[
                     "stage_1_expected_num_trials"
                 ],
-                "stage_2_expected_num_trials": point[
+                "expected_num_trials_stage_2": point[
                     "stage_2_expected_num_trials"
                 ],
-                "top_m": privacy_points["two_stage_top_m"],
-                "eta": privacy_points["two_stage_eta"],
-                "epsilon": dp_result.epsilon,
-                "delta": dp_result.delta,
-                "best_renyi_order": dp_result.best_order,
-                "is_at_min_order": dp_result.is_at_min_order,
-                "is_at_max_order": dp_result.is_at_max_order,
-                "min_renyi_order": int(orders[0]),
-                "max_renyi_order": int(orders[-1]),
-                "accounting_method": accounting_method,
-                **accounting_metadata,
             }
-        )
+            if method == "two_stage_poisson_tuning":
+                selection_result = compute_two_stage_rdp_poisson(
+                    **common_arguments
+                )
+                sampling_distribution = "poisson"
+                eta = ""
+                probability_k_zero = float(
+                    np.exp(-point["stage_2_expected_num_trials"])
+                )
+            else:
+                selection_result = compute_two_stage_rdp(
+                    **common_arguments,
+                    eta_stage_1=privacy_points["two_stage_eta"],
+                    eta_stage_2=privacy_points["two_stage_eta"],
+                )
+                sampling_distribution = "tnb"
+                eta = privacy_points["two_stage_eta"]
+                probability_k_zero = 0.0
+            dp_result = convert_rdp_to_approx_dp(
+                selection_result.rdp_curve,
+                delta=delta,
+            )
+            validate_privacy_order_search(
+                dp_result=dp_result,
+                method=method,
+                expected_compute=point["expected_compute"],
+            )
+            privacy_rows.append(
+                {
+                    "method": method,
+                    "point_index": point["point_index"],
+                    "expected_compute": point["expected_compute"],
+                    "expected_num_trials": "",
+                    "stage_1_expected_num_trials": point[
+                        "stage_1_expected_num_trials"
+                    ],
+                    "stage_2_expected_num_trials": point[
+                        "stage_2_expected_num_trials"
+                    ],
+                    "top_m": privacy_points["two_stage_top_m"],
+                    "sampling_distribution": sampling_distribution,
+                    "eta": eta,
+                    "probability_K_zero": probability_k_zero,
+                    "epsilon": dp_result.epsilon,
+                    "delta": dp_result.delta,
+                    "best_renyi_order": dp_result.best_order,
+                    "is_at_min_order": dp_result.is_at_min_order,
+                    "is_at_max_order": dp_result.is_at_max_order,
+                    "min_renyi_order": int(orders[0]),
+                    "max_renyi_order": int(orders[-1]),
+                    "accounting_method": accounting_method,
+                    "theorem_source_order": "",
+                    "hat_epsilon": "",
+                    "hat_delta": "",
+                    "best_auxiliary_renyi_order": "",
+                    "raw_theorem_rdp_epsilon": "",
+                    "enveloped_rdp_epsilon": "",
+                    **accounting_metadata,
+                }
+            )
 
     paths = get_compilation_paths(exp_config)
     compiled_root = paths["compiled_root"]
@@ -437,12 +558,20 @@ def plot_privacy_compute_plot(config):
         csv_path=csv_path,
     )
 
-    method_labels = {
-        "papernot_baseline": "Papernot baseline",
-        "two_stage_tuning": "Two-stage tuning",
+    method_styles = {
+        "papernot_baseline": {"linestyle": "-", "marker": "o"},
+        "papernot_poisson_baseline": {
+            "linestyle": ":",
+            "marker": "^",
+        },
+        "two_stage_tuning": {"linestyle": "--", "marker": "s"},
+        "two_stage_poisson_tuning": {
+            "linestyle": "-.",
+            "marker": "D",
+        },
     }
     figure, axis = plt.subplots(figsize=(10, 5))
-    for method in RESULT_FILENAMES:
+    for method in methods:
         method_rows = sorted(
             (
                 row
@@ -454,8 +583,8 @@ def plot_privacy_compute_plot(config):
         axis.plot(
             [row["expected_compute"] for row in method_rows],
             [row["epsilon"] for row in method_rows],
-            label=method_labels[method],
-            marker="o",
+            label=COMPUTE_MATCHED_METHOD_LABELS[method],
+            **method_styles[method],
         )
 
     axis.set_xlabel("Expected compute (optimizer updates)")
@@ -531,9 +660,20 @@ def run_planned_simulations(config, stage, *, privacy_matched=False):
     else:
         execution_config = config
         exp_config = execution_config.experiment
+        utility_at = str(
+            exp_config.evaluation.utility.get(
+                "at",
+                "selection_round",
+            )
+        ).strip().lower()
         simulation_plan = load_simulation_plan(
             exp_config,
             stage=stage,
+            selection_signature=(
+                get_selection_signature(config)
+                if utility_at == "selected_checkpoint"
+                else None
+            ),
         )
         simulations_root = (
             Path(HydraConfig.get().runtime.output_dir)
@@ -610,10 +750,30 @@ def run_planned_simulations(config, stage, *, privacy_matched=False):
                 stage_1_source_path=stage_1_source_path,
             )
 
-        train_data_loader, test_data_loader = get_data_loaders(
-            execution_config,
-            seed=base_seed,
-        )
+        utility_at = str(
+            exp_config.evaluation.utility.get(
+                "at",
+                "selection_round",
+            )
+        ).strip().lower()
+        peak_aware = utility_at == "selected_checkpoint"
+        if peak_aware:
+            (
+                train_data_loader,
+                validation_data_loader,
+                _,
+            ) = get_data_loaders(
+                execution_config,
+                seed=base_seed,
+                split_public_evaluation=True,
+            )
+            test_data_loader = None
+        else:
+            train_data_loader, test_data_loader = get_data_loaders(
+                execution_config,
+                seed=base_seed,
+            )
+            validation_data_loader = None
 
         central_trainer = CentralTrainer(
             model=build_model(exp_config.dataset),
@@ -649,6 +809,23 @@ def run_planned_simulations(config, stage, *, privacy_matched=False):
             ),
             evaluation_interval=(
                 execution_config.run_settings.evaluation_interval
+            ),
+            validation_data_loader=validation_data_loader,
+            selection_metric=(
+                str(exp_config.evaluation.selection.metric)
+                if peak_aware
+                else None
+            ),
+            selection_mode=(
+                str(exp_config.evaluation.selection.mode)
+                if peak_aware
+                else None
+            ),
+            peak_tie_break=str(
+                exp_config.evaluation.selection.get(
+                    "peak_tie_break",
+                    "earliest",
+                )
             ),
         )
         central_trainer.train()
@@ -702,6 +879,15 @@ def calculate_E_K_given_compute_for_papernot(compute, stage_compute_schedule):
 def utility_compute_plot(config: DictConfig) -> None:
     exp_config = config.experiment
     two_stage_settings = get_two_stage_settings(exp_config)
+    methods = get_compute_matched_methods(exp_config)
+    utility_at = str(
+        exp_config.evaluation.utility.get("at", "selection_round")
+    ).strip().lower()
+    selection_signature = (
+        get_selection_signature(config)
+        if utility_at == "selected_checkpoint"
+        else None
+    )
     if exp_config.run_mode.generate_stage_1_plan:
         stage_compute_schedule = get_stage_compute_schedule(
             exp_config
@@ -718,26 +904,34 @@ def utility_compute_plot(config: DictConfig) -> None:
             point["expected_num_trials"]
             for point in privacy_points["papernot_points"]
         ]
-        generate_plan(
-            exp_config,
-            "papernot_baseline",
-            1,
-            E_K_values_papernot_baseline,
-            exp_config.num_trials,
-            exp_config.run_id,
-            exp_config.hp_configuration_ids,
-            PLAN_FILENAMES["papernot_baseline"][1],
-        )
-        generate_plan(
-            exp_config,
-            "two_stage_tuning",
-            two_stage_settings.num_survivors,
-            E_K_values_N_stage,
-            exp_config.num_trials,
-            exp_config.run_id,
-            exp_config.hp_configuration_ids,
-            PLAN_FILENAMES["two_stage_tuning"][1],
-        )
+        for method in methods:
+            is_two_stage = method in TWO_STAGE_METHODS
+            generate_plan(
+                exp_config,
+                method,
+                (
+                    two_stage_settings.num_survivors
+                    if is_two_stage
+                    else 1
+                ),
+                (
+                    E_K_values_N_stage
+                    if is_two_stage
+                    else E_K_values_papernot_baseline
+                ),
+                exp_config.num_trials,
+                exp_config.run_id,
+                exp_config.hp_configuration_ids,
+                PLAN_FILENAMES[method][1],
+                plan_metadata={
+                    "plan_type": "compute_matched",
+                    **(
+                        {"selection_signature": selection_signature}
+                        if selection_signature is not None
+                        else {}
+                    ),
+                },
+            )
         plot_privacy_compute_plot(config)
 
     if exp_config.run_mode.run_simulation_stage_1:
@@ -752,6 +946,7 @@ def utility_compute_plot(config: DictConfig) -> None:
             evaluation_interval=int(
                 config.run_settings.evaluation_interval
             ),
+            selection_signature=selection_signature,
         )
         print(
             f"Generated Stage-2 plan: {plan_path}",
@@ -765,6 +960,11 @@ def utility_compute_plot(config: DictConfig) -> None:
         )
 
     if exp_config.run_mode.compile_result:
+        utility_evaluator = (
+            HeldoutCheckpointEvaluator(config)
+            if utility_at == "selected_checkpoint"
+            else None
+        )
         outputs = compile_experiment_results(
             exp_config,
             stage_compute_schedule=get_stage_compute_schedule(
@@ -776,6 +976,8 @@ def utility_compute_plot(config: DictConfig) -> None:
             compute_axis_label=(
                 "Expected compute (optimizer updates)"
             ),
+            utility_evaluator=utility_evaluator,
+            selection_signature=selection_signature,
         )
         print(
             f"Compiled central results: {outputs['trial_csv_path']}",
@@ -832,19 +1034,24 @@ def utility_privacy_plot(config: DictConfig) -> None:
             privacy_matched=True,
         )
 
-    unsupported_checkpoints = [
-        checkpoint
-        for checkpoint in (
-            "compile_result",
+    if exp_config.run_mode.compile_result:
+        utility_evaluator = None
+        compilation_targets = [
+            str(target)
+            for target in exp_config.compilation.targets
+        ]
+        if "utility_privacy" in compilation_targets:
+            utility_evaluator = HeldoutCheckpointEvaluator(config)
+        outputs = compile_privacy_matched_results(
+            config,
+            utility_evaluator=utility_evaluator,
         )
-        if bool(exp_config.run_mode.get(checkpoint, False))
-    ]
-    if unsupported_checkpoints:
-        raise NotImplementedError(
-            "The privacy-matched runner does not implement these "
-            "checkpoints yet: "
-            f"{', '.join(unsupported_checkpoints)}."
-        )
+        for target, target_outputs in outputs.items():
+            print(
+                "Compiled privacy-matched result "
+                f"{target}: {target_outputs['output_directory']}",
+                flush=True,
+            )
 
 
 EXPERIMENT_RUNNERS = {

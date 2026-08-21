@@ -2,6 +2,7 @@
 
 import copy
 import csv
+import json
 import math
 from pathlib import Path
 
@@ -15,12 +16,20 @@ from utils.seed_utils import (
 )
 
 
-_METRIC_HEADER = [
+_LEGACY_METRIC_HEADER = [
     "Round",
     "Train Loss",
     "Test Loss",
     "Train Accuracy",
     "Test Accuracy",
+]
+
+_VALIDATION_METRIC_HEADER = [
+    "Round",
+    "Train Loss",
+    "Validation Loss",
+    "Train Accuracy",
+    "Validation Accuracy",
 ]
 
 
@@ -59,6 +68,10 @@ class CentralTrainer:
         momentum=0.0,
         checkpoint_interval=10,
         evaluation_interval=1,
+        validation_data_loader=None,
+        selection_metric=None,
+        selection_mode=None,
+        peak_tie_break="earliest",
     ):
         self.stage = self._validate_stage(stage)
         self.stage_1_end = self._validate_non_negative_integer(
@@ -128,11 +141,66 @@ class CentralTrainer:
             train_data_loader,
             sample_rate,
         )
+        self.validation_data_loader = validation_data_loader
         self.test_data_loader = test_data_loader
+        if self.validation_data_loader is not None:
+            self.evaluation_data_loader = self.validation_data_loader
+            self.evaluation_prefix = "validation"
+            self.metric_header = _VALIDATION_METRIC_HEADER
+        elif self.test_data_loader is not None:
+            self.evaluation_data_loader = self.test_data_loader
+            self.evaluation_prefix = "test"
+            self.metric_header = _LEGACY_METRIC_HEADER
+        else:
+            raise ValueError(
+                "Either validation_data_loader or test_data_loader must "
+                "be provided."
+            )
         if len(self.train_data_loader.dataset) == 0:
             raise ValueError("The centralized training dataset is empty.")
-        if len(self.test_data_loader.dataset) == 0:
-            raise ValueError("The centralized test dataset is empty.")
+        if len(self.evaluation_data_loader.dataset) == 0:
+            raise ValueError(
+                "The centralized evaluation dataset is empty."
+            )
+
+        self.selection_metric = self._normalize_selection_metric(
+            selection_metric
+        )
+        self.selection_mode = self._validate_selection_mode(
+            selection_mode,
+            enabled=self.selection_metric is not None,
+        )
+        self.peak_tie_break = str(peak_tie_break).strip().lower()
+        if (
+            self.selection_metric is not None
+            and self.peak_tie_break != "earliest"
+        ):
+            raise ValueError(
+                "peak_tie_break currently supports only 'earliest'; "
+                f"got {peak_tie_break!r}."
+            )
+        if self.selection_metric is not None:
+            allowed_selection_metrics = {
+                "train_loss",
+                "train_accuracy",
+                f"{self.evaluation_prefix}_loss",
+                f"{self.evaluation_prefix}_accuracy",
+            }
+            if self.selection_metric not in allowed_selection_metrics:
+                raise ValueError(
+                    f"selection_metric {self.selection_metric!r} is not "
+                    "produced by this trainer. Available metrics: "
+                    f"{sorted(allowed_selection_metrics)}."
+                )
+
+        self.peak_selection = None
+        self.peak_model_state_dict = None
+        self.peak_checkpoint_path = (
+            self.save_path / f"{self.file_name}_peak.pt"
+        )
+        self.peak_metadata_path = (
+            self.save_path / f"{self.file_name}_peak.JSON"
+        )
 
         self.model = copy.deepcopy(model)
         self.start_iter = 0
@@ -189,6 +257,10 @@ class CentralTrainer:
         if self.resume_from_checkpoint:
             self._restore_training_state(checkpoint)
         self._initialize_metrics_file()
+        if self.resume_from_checkpoint and self.selection_metric is not None:
+            self._validate_peak_metrics_consistency()
+            if self.peak_selection is not None:
+                self._save_peak_artifacts()
 
     @staticmethod
     def _validate_stage(stage):
@@ -240,6 +312,31 @@ class CentralTrainer:
                 f"{name} must be finite and non-negative; got {value!r}."
             )
         return parsed_value
+
+    @staticmethod
+    def _normalize_selection_metric(metric):
+        if metric is None:
+            return None
+        normalized_metric = str(metric).strip().lower().replace(" ", "_")
+        if not normalized_metric:
+            raise ValueError("selection_metric must not be empty.")
+        return normalized_metric
+
+    @staticmethod
+    def _validate_selection_mode(mode, enabled):
+        if not enabled:
+            if mode is not None:
+                raise ValueError(
+                    "selection_mode requires selection_metric."
+                )
+            return None
+        normalized_mode = str(mode).strip().lower()
+        if normalized_mode not in {"min", "max", "last_round"}:
+            raise ValueError(
+                "selection_mode must be 'min', 'max', or 'last_round'; "
+                f"got {mode!r}."
+            )
+        return normalized_mode
 
     def _validate_stage_boundaries(self, stage_1_source_path):
         if stage_1_source_path is not None and self.stage != 2:
@@ -500,6 +597,30 @@ class CentralTrainer:
                 accountant_state
             )
 
+        if self.selection_metric is not None:
+            peak_selection = checkpoint.get("peak_selection")
+            peak_model_state_dict = checkpoint.get(
+                "peak_model_state_dict"
+            )
+            if (peak_selection is None) != (
+                peak_model_state_dict is None
+            ):
+                raise ValueError(
+                    "A peak-aware checkpoint must contain both "
+                    "peak_selection and peak_model_state_dict."
+                )
+            if peak_selection is not None:
+                self._validate_peak_selection(peak_selection)
+                if int(peak_selection["round"]) >= self.start_iter:
+                    raise ValueError(
+                        "The stored peak round must precede the terminal "
+                        "checkpoint update count."
+                    )
+                self.peak_selection = copy.deepcopy(peak_selection)
+                self.peak_model_state_dict = copy.deepcopy(
+                    peak_model_state_dict
+                )
+
     def _initialize_metrics_file(self):
         start_round = self.stage_1_end if self.stage == 2 else 0
         if self.resume_from_checkpoint:
@@ -513,7 +634,7 @@ class CentralTrainer:
             encoding="utf-8",
             newline="",
         ) as file:
-            csv.writer(file).writerow(_METRIC_HEADER)
+            csv.writer(file).writerow(self.metric_header)
 
     def _validate_and_truncate_metrics(
         self,
@@ -536,7 +657,7 @@ class CentralTrainer:
             newline="",
         ) as file:
             writer = csv.writer(file)
-            writer.writerow(_METRIC_HEADER)
+            writer.writerow(self.metric_header)
             writer.writerows(retained_rows)
 
     def _validate_metrics_file(
@@ -555,7 +676,7 @@ class CentralTrainer:
             newline="",
         ) as file:
             rows = list(csv.reader(file))
-        if not rows or rows[0] != _METRIC_HEADER:
+        if not rows or rows[0] != self.metric_header:
             raise RuntimeError(
                 f"Metrics CSV {metrics_path} has an invalid header."
             )
@@ -594,6 +715,56 @@ class CentralTrainer:
                 f"{completed_iters - 1}."
             )
         return rows
+
+    def _validate_peak_metrics_consistency(self):
+        with self.metrics_path.open(
+            mode="r",
+            encoding="utf-8",
+            newline="",
+        ) as file:
+            reader = csv.DictReader(file)
+            rows = list(reader)
+            fieldnames = reader.fieldnames or []
+        if rows and self.peak_selection is None:
+            raise RuntimeError(
+                "The resumed checkpoint has evaluated metric rows but "
+                "does not contain peak-selection state."
+            )
+        if self.peak_selection is None:
+            return
+        normalized_columns = {
+            str(column).strip().lower().replace(" ", "_"): column
+            for column in fieldnames
+        }
+        try:
+            round_column = normalized_columns["round"]
+            metric_column = normalized_columns[self.selection_metric]
+        except KeyError as error:
+            raise RuntimeError(
+                "The metrics CSV does not contain the stored peak "
+                f"selection field {error.args[0]!r}."
+            ) from error
+        peak_round = int(self.peak_selection["round"])
+        matching_rows = [
+            row for row in rows if int(row[round_column]) == peak_round
+        ]
+        if len(matching_rows) != 1:
+            raise RuntimeError(
+                "The resumed metrics CSV does not contain exactly one "
+                f"row for stored peak round {peak_round}."
+            )
+        observed_score = float(matching_rows[0][metric_column])
+        if not math.isclose(
+            observed_score,
+            float(self.peak_selection["score"]),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise RuntimeError(
+                "The resumed peak checkpoint and metrics CSV disagree: "
+                f"stored={self.peak_selection['score']!r}, "
+                f"CSV={observed_score!r}."
+            )
 
     @staticmethod
     def _extract_batch(batch, x_label, y_label):
@@ -647,8 +818,8 @@ class CentralTrainer:
         train_loss, train_accuracy = self._evaluate_loader(
             self.evaluation_train_data_loader
         )
-        test_loss, test_accuracy = self._evaluate_loader(
-            self.test_data_loader
+        evaluation_loss, evaluation_accuracy = self._evaluate_loader(
+            self.evaluation_data_loader
         )
         with self.metrics_path.open(
             mode="a",
@@ -659,20 +830,145 @@ class CentralTrainer:
                 [
                     iteration,
                     train_loss,
-                    test_loss,
+                    evaluation_loss,
                     train_accuracy,
-                    test_accuracy,
+                    evaluation_accuracy,
                 ]
             )
-        return {
+        metrics = {
             "train_loss": train_loss,
-            "test_loss": test_loss,
             "train_accuracy": train_accuracy,
-            "test_accuracy": test_accuracy,
+            f"{self.evaluation_prefix}_loss": evaluation_loss,
+            f"{self.evaluation_prefix}_accuracy": evaluation_accuracy,
         }
+        self._update_peak(iteration=iteration, metrics=metrics)
+        return metrics
 
     def _base_model(self):
         return getattr(self.model, "_module", self.model)
+
+    def _copy_base_model_state(self):
+        return {
+            key: value.detach().cpu().clone()
+            for key, value in self._base_model().state_dict().items()
+        }
+
+    def _validate_peak_selection(self, selection):
+        if not isinstance(selection, dict):
+            raise ValueError("peak_selection must be a mapping.")
+        expected_values = {
+            "metric": self.selection_metric,
+            "mode": self.selection_mode,
+            "tie_break": self.peak_tie_break,
+            "stage": self.stage,
+        }
+        for key, expected_value in expected_values.items():
+            if selection.get(key) != expected_value:
+                raise ValueError(
+                    f"Stored peak_selection {key}="
+                    f"{selection.get(key)!r}, expected "
+                    f"{expected_value!r}."
+                )
+        peak_round = selection.get("round")
+        if (
+            isinstance(peak_round, bool)
+            or not isinstance(peak_round, int)
+            or peak_round < 0
+        ):
+            raise ValueError(
+                f"Stored peak round is invalid: {peak_round!r}."
+            )
+        peak_score = float(selection.get("score"))
+        if not math.isfinite(peak_score):
+            raise ValueError(
+                f"Stored peak score is invalid: {peak_score!r}."
+            )
+
+    def _update_peak(self, iteration, metrics):
+        if self.selection_metric is None:
+            return
+        score = float(metrics[self.selection_metric])
+        if not math.isfinite(score):
+            raise FloatingPointError(
+                "The checkpoint-selection metric is non-finite at "
+                f"round {iteration}: {score!r}."
+            )
+        is_better = self.peak_selection is None
+        if self.peak_selection is not None:
+            current_score = float(self.peak_selection["score"])
+            if self.selection_mode == "min":
+                is_better = score < current_score
+            elif self.selection_mode == "max":
+                is_better = score > current_score
+            else:
+                is_better = True
+        if not is_better:
+            return
+        self.peak_selection = {
+            "metric": self.selection_metric,
+            "mode": self.selection_mode,
+            "tie_break": self.peak_tie_break,
+            "stage": self.stage,
+            "round": int(iteration),
+            "score": score,
+        }
+        self.peak_model_state_dict = self._copy_base_model_state()
+
+    def _save_peak_artifacts(self):
+        if self.peak_selection is None:
+            return
+        self._validate_peak_selection(self.peak_selection)
+        if self.peak_model_state_dict is None:
+            raise RuntimeError(
+                "Peak metadata exists without peak model weights."
+            )
+        peak_checkpoint = {
+            "schema_version": 1,
+            "artifact_type": "selected_peak_model",
+            "stage": self.stage,
+            "round": int(self.peak_selection["round"]),
+            "rounds": int(self.peak_selection["round"]) + 1,
+            "selection": copy.deepcopy(self.peak_selection),
+            "model_state_dict": copy.deepcopy(
+                self.peak_model_state_dict
+            ),
+        }
+        temporary_checkpoint_path = self.peak_checkpoint_path.with_suffix(
+            ".pt.tmp"
+        )
+        try:
+            torch.save(peak_checkpoint, temporary_checkpoint_path)
+            temporary_checkpoint_path.replace(self.peak_checkpoint_path)
+        finally:
+            if temporary_checkpoint_path.exists():
+                temporary_checkpoint_path.unlink()
+
+        peak_metadata = {
+            key: value
+            for key, value in peak_checkpoint.items()
+            if key != "model_state_dict"
+        }
+        peak_metadata["checkpoint_path"] = str(
+            self.peak_checkpoint_path
+        )
+        temporary_metadata_path = self.peak_metadata_path.with_suffix(
+            ".JSON.tmp"
+        )
+        try:
+            with temporary_metadata_path.open(
+                mode="w",
+                encoding="utf-8",
+            ) as file:
+                json.dump(
+                    peak_metadata,
+                    file,
+                    indent=4,
+                    allow_nan=False,
+                )
+            temporary_metadata_path.replace(self.peak_metadata_path)
+        finally:
+            if temporary_metadata_path.exists():
+                temporary_metadata_path.unlink()
 
     def save_checkpoint(self, completed_iters):
         checkpoint = {
@@ -682,6 +978,13 @@ class CentralTrainer:
             "model_state_dict": self._base_model().state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
         }
+        if self.selection_metric is not None:
+            checkpoint["peak_selection"] = copy.deepcopy(
+                self.peak_selection
+            )
+            checkpoint["peak_model_state_dict"] = copy.deepcopy(
+                self.peak_model_state_dict
+            )
         if self.dp:
             checkpoint["noise_generator_state"] = (
                 self.noise_generator.get_state()
@@ -696,6 +999,7 @@ class CentralTrainer:
         finally:
             if temporary_path.exists():
                 temporary_path.unlink()
+        self._save_peak_artifacts()
 
     def _get_iteration_batch(self, iteration):
         sampling_seed = derive_seed(
@@ -775,9 +1079,11 @@ class CentralTrainer:
                 )
                 print(
                     f"{stage_label}: completed {completed_iters}/"
-                    f"{self.num_iters} updates; test_loss="
-                    f"{metrics['test_loss']:.6f}; test_accuracy="
-                    f"{metrics['test_accuracy']:.6f}",
+                    f"{self.num_iters} updates; "
+                    f"{self.evaluation_prefix}_loss="
+                    f"{metrics[f'{self.evaluation_prefix}_loss']:.6f}; "
+                    f"{self.evaluation_prefix}_accuracy="
+                    f"{metrics[f'{self.evaluation_prefix}_accuracy']:.6f}",
                     flush=True,
                 )
             if completed_iters % self.checkpoint_interval == 0:

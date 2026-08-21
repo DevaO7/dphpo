@@ -5,7 +5,7 @@ runner: utility_compute_plot
 seed: 1
 
 simulation:
-  method: papernot_baseline
+  method: two_stage_poisson_tuning
   run_hp_configuration: H2
   stage: 1
   stage_1_end: 2000
@@ -18,11 +18,21 @@ run_mode:
   run_simulation_stage_2: false
   compile_result: true
 
+comparison:
+  methods:
+    - papernot_poisson_baseline
+    - two_stage_tuning
+    - two_stage_poisson_tuning
+
 base_E_K_list: [5, 7, 10, 15, 20]
 num_trials: 30
-run_id: run_id_8
+run_id: run_id_10
 hp_configuration_ids: ["H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10"]
 eta: 0
+
+poisson:
+  # Public, data-independent model returned when Poisson sampling gives K=0.
+  k_zero_model_seed: 2027
 
 two_stage:
   num_survivors: 3
@@ -43,6 +53,10 @@ dataset:
   loss_fn: CrossEntropyLoss
   x_label: "x"
   y_label: "y"
+  # Public validation drives HPO; held-out test reports selected utility.
+  public_evaluation_split:
+    validation_fraction: 0.5
+    seed: 2027
   model:
     # FashionMNIST uses this width; MNIST uses the fixed Opacus CNN.
     hidden_width: 120
@@ -75,12 +89,11 @@ privacy:
 
 evaluation:
   selection:
-    metric: train_loss
+    metric: validation_loss
     mode: min
+    peak_tie_break: earliest
   utility:
     metrics:
-      - train_loss
-      - train_accuracy
       - test_loss
       - test_accuracy
-    at: selection_round
+    at: selected_checkpoint

@@ -1,4 +1,4 @@
-"""Deterministic TNB trial-plan generation shared by all trainers."""
+"""Deterministic HPO trial-plan generation shared by all trainers."""
 
 from collections import Counter
 import copy
@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from privacy_accounting import dpsgd, rdp_utils, selection_accounting
+from privacy_accounting.poisson import PoissonDistribution
 from privacy_accounting.tnb import (
     TNBDistribution,
     _solve_gamma_for_conditional_mean,
@@ -21,9 +22,17 @@ PLAN_FILENAMES = {
         1: "papernot_baseline.JSON",
         2: "papernot_baseline.JSON",
     },
+    "papernot_poisson_baseline": {
+        1: "papernot_poisson_baseline.JSON",
+        2: "papernot_poisson_baseline.JSON",
+    },
     "two_stage_tuning": {
         1: "two_stage_tuning_stage_1.JSON",
         2: "two_stage_tuning_stage_2.JSON",
+    },
+    "two_stage_poisson_tuning": {
+        1: "two_stage_poisson_tuning_stage_1.JSON",
+        2: "two_stage_poisson_tuning_stage_2.JSON",
     },
 }
 
@@ -40,6 +49,178 @@ PRIVACY_MATCHED_POINT_METADATA_FIELDS = (
 # to NumPy's legacy uint32 RNG. Leave enough headroom for the round,
 # local-step, and user offsets added during training.
 MAX_TRAINING_BASE_SEED = 8_000_000
+
+PAPERNOT_METHODS = {
+    "papernot_baseline",
+    "papernot_poisson_baseline",
+}
+
+TWO_STAGE_METHODS = {
+    "two_stage_tuning",
+    "two_stage_poisson_tuning",
+}
+
+POISSON_METHODS = {
+    "papernot_poisson_baseline",
+    "two_stage_poisson_tuning",
+}
+
+
+def _sampling_distribution_for_method(method):
+    if method in POISSON_METHODS:
+        return "poisson"
+    return "tnb"
+
+
+def _selection_method_for_method(method):
+    if method == "papernot_poisson_baseline":
+        return "papernot_poisson_top1"
+    if method == "two_stage_poisson_tuning":
+        return "papernot_poisson_top_m_then_top1"
+    if method == "two_stage_tuning":
+        return "papernot_top1"
+    return "papernot_top1"
+
+
+def _poisson_k_zero_fallback(config):
+    poisson_config = config.get("poisson", {})
+    seed = poisson_config.get("k_zero_model_seed", 2027)
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError(
+            "poisson.k_zero_model_seed must be a non-negative integer."
+        )
+    return {
+        "mechanism": "fixed_random_initialization",
+        "model_seed": int(seed),
+        "depends_on_private_data": False,
+        "num_private_training_runs": 0,
+        "description": (
+            "When K=0, return the configured model architecture at a "
+            "fixed random initialization without accessing private data."
+        ),
+    }
+
+
+def get_selection_signature(config):
+    """Return the immutable public-selection definition for central runs."""
+    if "experiment" not in config or "run_settings" not in config:
+        raise ValueError(
+            "A selection signature requires the full experiment and "
+            "run_settings configuration."
+        )
+    exp_config = config.experiment
+    selection = exp_config.evaluation.selection
+    utility = exp_config.evaluation.utility
+    selection_metric = (
+        str(selection.metric).strip().lower().replace(" ", "_")
+    )
+    selection_mode = str(selection.mode).strip().lower()
+    if selection_metric not in {
+        "validation_loss",
+        "validation_accuracy",
+    }:
+        raise ValueError(
+            "Peak-checkpoint experiments must select using "
+            "validation_loss or validation_accuracy; got "
+            f"{selection_metric!r}."
+        )
+    if selection_mode not in {"min", "max", "last_round"}:
+        raise ValueError(
+            "evaluation.selection.mode must be 'min', 'max', or "
+            f"'last_round'; got {selection_mode!r}."
+        )
+    expected_selection_mode = (
+        "min" if selection_metric.endswith("_loss") else "max"
+    )
+    if selection_mode not in {expected_selection_mode, "last_round"}:
+        raise ValueError(
+            f"{selection_metric} must use mode "
+            f"{expected_selection_mode!r} or 'last_round'; got "
+            f"{selection_mode!r}."
+        )
+    utility_at = str(utility.get("at", "selection_round")).strip().lower()
+    if utility_at != "selected_checkpoint":
+        raise ValueError(
+            "Peak-checkpoint experiments require "
+            "evaluation.utility.at='selected_checkpoint'."
+        )
+    configured_utility_metrics = utility.metrics
+    if isinstance(configured_utility_metrics, str):
+        configured_utility_metrics = [configured_utility_metrics]
+    utility_metrics = [
+        str(metric).strip().lower().replace(" ", "_")
+        for metric in configured_utility_metrics
+    ]
+    if (
+        not utility_metrics
+        or len(set(utility_metrics)) != len(utility_metrics)
+        or any(
+            metric not in {"test_loss", "test_accuracy"}
+            for metric in utility_metrics
+        )
+    ):
+        raise ValueError(
+            "Selected-checkpoint utility metrics must be a non-empty, "
+            "unique subset of test_loss and test_accuracy."
+        )
+    evaluation_interval = config.run_settings.evaluation_interval
+    if (
+        isinstance(evaluation_interval, bool)
+        or not isinstance(evaluation_interval, int)
+        or evaluation_interval <= 0
+    ):
+        raise ValueError(
+            "run_settings.evaluation_interval must be a positive integer."
+        )
+    split_config = exp_config.dataset.get("public_evaluation_split")
+    if split_config is None:
+        raise ValueError(
+            "experiment.dataset.public_evaluation_split is required."
+        )
+    validation_fraction = float(
+        split_config.get("validation_fraction", 0.5)
+    )
+    split_seed = split_config.get("seed", 0)
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError(
+            "public_evaluation_split.validation_fraction must be "
+            "strictly between 0 and 1."
+        )
+    if (
+        isinstance(split_seed, bool)
+        or not isinstance(split_seed, int)
+        or split_seed < 0
+    ):
+        raise ValueError(
+            "public_evaluation_split.seed must be a non-negative integer."
+        )
+    peak_tie_break = str(
+        selection.get("peak_tie_break", "earliest")
+    ).strip().lower()
+    if peak_tie_break != "earliest":
+        raise ValueError(
+            "evaluation.selection.peak_tie_break currently supports "
+            "only 'earliest'."
+        )
+    return {
+        "schema_version": 1,
+        "selection_metric": selection_metric,
+        "selection_mode": selection_mode,
+        "evaluation_interval": int(evaluation_interval),
+        "peak_tie_break": peak_tie_break,
+        "public_evaluation_split": {
+            "source": "configured_test_split",
+            "dataset_name": str(exp_config.dataset.name),
+            "dataset_id": str(
+                exp_config.dataset.get("dataset_id", "")
+            ),
+            "validation_fraction": validation_fraction,
+            "seed": int(split_seed),
+        },
+        "utility_at": utility_at,
+        "utility_metrics": utility_metrics,
+        "peak_checkpoint_schema_version": 1,
+    }
 
 
 def derive_training_base_seed(components):
@@ -312,8 +493,12 @@ def generate_plan(
     """Generate and persist a deterministic static HPO trial plan.
 
     ``point_metadata`` and ``plan_metadata`` allow experiment-specific
-    planners to attach immutable metadata while retaining the shared TNB
-    sampling, seed derivation, and run-deduplication logic.
+    planners to attach immutable metadata while retaining the shared
+    sampling, seed derivation, and run-deduplication logic. The existing
+    TNB methods use conditioned TNB sampling. The Poisson Papernot baseline
+    uses an unconditioned count whose support includes zero. Poisson
+    two-stage Stage 1 instead conditions on ``K >= m`` and calibrates the
+    underlying Poisson rate so ``E[K | K >= m]`` equals ``E_K``.
     """
     if method not in PLAN_FILENAMES:
         raise ValueError(
@@ -340,21 +525,44 @@ def generate_plan(
     }
     points = []
     total_num_simulations = 0
+    sampling_distribution = _sampling_distribution_for_method(method)
+    if method == "papernot_poisson_baseline" and int(m) != 1:
+        raise ValueError(
+            "The Poisson Papernot baseline supports top-1 release only."
+        )
 
     for point_index, E_K in enumerate(E_K_values):
-        gamma = _solve_gamma_for_conditional_mean(
-            eta=config.eta,
-            m=m,
-            target_mean=E_K,
-        )
-        tnb = TNBDistribution(config.eta, gamma)
+        if method == "papernot_poisson_baseline":
+            distribution = PoissonDistribution.from_mean(
+                target_mean=E_K
+            )
+            gamma = None
+        elif method == "two_stage_poisson_tuning":
+            distribution = PoissonDistribution.from_conditional_mean(
+                m=m,
+                target_mean=E_K,
+            )
+            gamma = None
+        else:
+            gamma = _solve_gamma_for_conditional_mean(
+                eta=config.eta,
+                m=m,
+                target_mean=E_K,
+            )
+            distribution = TNBDistribution(config.eta, gamma)
         trials = []
 
         for trial in range(num_trials):
+            sampling_seed = trial + config.seed + point_index
             rng = np.random.default_rng(
-                seed=trial + config.seed + point_index
+                seed=sampling_seed
             )
-            num_runs = int(tnb.sample_conditional(m, rng))
+            if method == "papernot_poisson_baseline":
+                num_runs = int(distribution.sample(rng))
+            elif method == "two_stage_poisson_tuning":
+                num_runs = int(distribution.sample_conditional(m, rng))
+            else:
+                num_runs = int(distribution.sample_conditional(m, rng))
             sampled_hp_configuration_ids = (
                 rng.choice(
                     hp_configuration_ids,
@@ -365,6 +573,7 @@ def generate_plan(
             trials.append(
                 {
                     "trial": trial,
+                    "sampling_seed": int(sampling_seed),
                     "sampled_K": num_runs,
                     "sampled_hp_configuration_ids": (
                         sampled_hp_configuration_ids
@@ -386,9 +595,30 @@ def generate_plan(
 
         point = {
             "E_K": float(E_K),
-            "gamma": float(gamma),
             "trials": trials,
         }
+        if method == "papernot_poisson_baseline":
+            point["probability_K_zero"] = float(
+                distribution.probability_zero()
+            )
+            point["poisson_rate"] = float(distribution.mu)
+            point["expected_K_semantics"] = "unconditioned_mean"
+        elif method == "two_stage_poisson_tuning":
+            point.update(
+                {
+                    "poisson_rate": float(distribution.mu),
+                    "conditioning_threshold": int(m),
+                    "conditioning_probability": float(
+                        distribution.survival_probability(m)
+                    ),
+                    "log_expected_binomial": float(
+                        distribution.log_expected_binomial(m)
+                    ),
+                    "expected_K_semantics": "conditional_mean",
+                }
+            )
+        else:
+            point["gamma"] = float(gamma)
         metadata = dict(point_metadata[point_index])
         conflicting_keys = set(point).intersection(metadata)
         if conflicting_keys:
@@ -402,7 +632,7 @@ def generate_plan(
     total_num_required_runs = sum(
         required_hp_configuration_runs.values()
     )
-    include_stage_2_specs = method == "papernot_baseline"
+    include_stage_2_specs = method in PAPERNOT_METHODS
     (
         required_stage_1_run_specs,
         required_stage_2_run_specs,
@@ -415,7 +645,8 @@ def generate_plan(
 
     plan = {
         "method": method,
-        "selection_method": "papernot_top1",
+        "selection_method": _selection_method_for_method(method),
+        "sampling_distribution": sampling_distribution,
         "stage_1_top_m": int(m),
         "eta": float(config.eta),
         "run_id": str(run_id),
@@ -440,6 +671,8 @@ def generate_plan(
             ),
         },
     }
+    if method == "papernot_poisson_baseline":
+        plan["k_zero_fallback"] = _poisson_k_zero_fallback(config)
     conflicting_keys = set(plan).intersection(plan_metadata)
     if conflicting_keys:
         raise ValueError(
@@ -620,6 +853,8 @@ def load_stage_2_plan(
 def load_simulation_plan(
     config,
     stage,
+    *,
+    selection_signature=None,
 ):
     if stage not in {1, 2}:
         raise ValueError(
@@ -663,6 +898,57 @@ def load_simulation_plan(
                 f"requires {expected_value!r}. Regenerate the plan or "
                 "restore the matching experiment configuration."
             )
+    if selection_signature is not None:
+        if plan.get("plan_type") != "compute_matched":
+            raise ValueError(
+                f"Simulation plan {plan_filename} must have "
+                "plan_type='compute_matched'. Regenerate the plan."
+            )
+        if plan.get("selection_signature") != selection_signature:
+            raise ValueError(
+                f"Simulation plan {plan_filename} has an incompatible "
+                "selection signature. Regenerate the plan."
+            )
+    expected_sampling_distribution = _sampling_distribution_for_method(
+        method
+    )
+    observed_sampling_distribution = plan.get(
+        "sampling_distribution",
+        "tnb",
+    )
+    if observed_sampling_distribution != expected_sampling_distribution:
+        raise ValueError(
+            f"Simulation plan {plan_filename} uses "
+            f"sampling_distribution={observed_sampling_distribution!r}, "
+            f"expected {expected_sampling_distribution!r}. Regenerate "
+            "the plan."
+        )
+    if method == "papernot_poisson_baseline":
+        if plan.get("selection_method") != "papernot_poisson_top1":
+            raise ValueError(
+                f"Simulation plan {plan_filename} must use "
+                "selection_method='papernot_poisson_top1'."
+            )
+        if plan.get("k_zero_fallback") != _poisson_k_zero_fallback(config):
+            raise ValueError(
+                f"Simulation plan {plan_filename} has an invalid K=0 "
+                "fallback definition. Regenerate the plan."
+            )
+    elif method == "two_stage_poisson_tuning":
+        if plan.get("selection_method") != (
+            "papernot_poisson_top_m_then_top1"
+        ):
+            raise ValueError(
+                f"Simulation plan {plan_filename} must use the Poisson "
+                "two-stage selection method. Regenerate the plan."
+            )
+        if stage == 2 and plan.get("stage_2_k_zero_fallback") != (
+            _poisson_k_zero_fallback(config)
+        ):
+            raise ValueError(
+                f"Simulation plan {plan_filename} has an invalid "
+                "Stage-2 K=0 fallback definition. Regenerate the plan."
+            )
 
     configured_num_trials = int(config.num_trials)
     points = plan.get("points")
@@ -692,7 +978,7 @@ def load_simulation_plan(
             f"contains {configured_point_count}. Regenerate the plan."
         )
 
-    if method == "two_stage_tuning":
+    if method in TWO_STAGE_METHODS:
         two_stage_settings = get_two_stage_settings(config)
         if plan.get("stage_1_top_m") != (
             two_stage_settings.num_survivors
@@ -744,6 +1030,7 @@ def load_simulation_plan(
             expected_stage_2_values = np.full(
                 len(points),
                 two_stage_settings.stage_2_expected_trials,
+                dtype=float,
             )
             if not np.array_equal(
                 observed_stage_2_values,
@@ -754,6 +1041,138 @@ def load_simulation_plan(
                     "two_stage.stage_2_expected_trials. Regenerate the "
                     "plan."
                 )
+        if method == "two_stage_poisson_tuning":
+            for point_index, (point, expected_stage_1_k) in enumerate(
+                zip(points, expected_stage_1_values)
+            ):
+                stage_1_distribution = (
+                    PoissonDistribution.from_conditional_mean(
+                        m=two_stage_settings.num_survivors,
+                        target_mean=expected_stage_1_k,
+                    )
+                )
+                rate_key = (
+                    "poisson_rate"
+                    if stage == 1
+                    else "stage_1_poisson_rate"
+                )
+                if not math.isclose(
+                    float(point.get(rate_key, math.nan)),
+                    stage_1_distribution.mu,
+                    rel_tol=1e-12,
+                    abs_tol=1e-12,
+                ):
+                    raise ValueError(
+                        f"Simulation plan {plan_filename} point "
+                        f"{point_index} has an invalid {rate_key}. "
+                        "Regenerate the plan."
+                    )
+                trial_container_key = (
+                    None if stage == 1 else "trial_stage_2"
+                )
+                minimum_k = (
+                    two_stage_settings.num_survivors
+                    if stage == 1
+                    else 0
+                )
+                for trial_index, trial in enumerate(point["trials"]):
+                    sampled_trial = (
+                        trial
+                        if trial_container_key is None
+                        else trial[trial_container_key]
+                    )
+                    sampled_k = sampled_trial.get("sampled_K")
+                    if (
+                        isinstance(sampled_k, bool)
+                        or not isinstance(sampled_k, int)
+                        or sampled_k < minimum_k
+                    ):
+                        raise ValueError(
+                            f"Simulation plan {plan_filename} point "
+                            f"{point_index}, trial {trial_index} has "
+                            f"invalid sampled_K={sampled_k!r}."
+                        )
+                    if stage == 2 and len(
+                        sampled_trial.get("sampled_stage_2_runs", [])
+                    ) != sampled_k:
+                        raise ValueError(
+                            f"Simulation plan {plan_filename} point "
+                            f"{point_index}, trial {trial_index} has "
+                            "Stage-2 run entries inconsistent with "
+                            "sampled_K."
+                        )
+                if stage == 2:
+                    expected_stage_2_k = (
+                        two_stage_settings.stage_2_expected_trials
+                    )
+                    if not math.isclose(
+                        float(
+                            point.get(
+                                "stage_2_poisson_rate",
+                                math.nan,
+                            )
+                        ),
+                        expected_stage_2_k,
+                        rel_tol=1e-12,
+                        abs_tol=1e-12,
+                    ) or not math.isclose(
+                        float(
+                            point.get(
+                                "stage_2_probability_K_zero",
+                                math.nan,
+                            )
+                        ),
+                        math.exp(-expected_stage_2_k),
+                        rel_tol=1e-12,
+                        abs_tol=1e-15,
+                    ):
+                        raise ValueError(
+                            f"Simulation plan {plan_filename} point "
+                            f"{point_index} has invalid Stage-2 Poisson "
+                            "metadata. Regenerate the plan."
+                        )
+    else:
+        if plan.get("stage_1_top_m") != 1:
+            raise ValueError(
+                f"Simulation plan {plan_filename} must have "
+                "stage_1_top_m=1. Regenerate the plan."
+            )
+        stage_1_compute = int(config.simulation.stage_1_end)
+        stage_2_end = int(config.simulation.stage_2_end)
+        stage_2_compute = stage_2_end - stage_1_compute
+        two_stage_settings = get_two_stage_settings(config)
+        expected_papernot_values = np.asarray(
+            [
+                (
+                    float(value) * stage_1_compute
+                    + two_stage_settings.stage_2_expected_trials
+                    * stage_2_compute
+                )
+                / stage_2_end
+                for value in config.base_E_K_list
+            ],
+            dtype=float,
+        )
+        try:
+            observed_papernot_values = np.asarray(
+                [float(point["E_K"]) for point in points],
+                dtype=float,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"Simulation plan {plan_filename} has invalid E_K values."
+            ) from error
+        if not np.allclose(
+            observed_papernot_values,
+            expected_papernot_values,
+            rtol=1e-12,
+            atol=1e-12,
+        ):
+            raise ValueError(
+                f"Simulation plan {plan_filename} does not use the "
+                "compute-matched Papernot expected-trial grid. Regenerate "
+                "the plan."
+            )
 
     required_specs_key = (
         f"required_stage_{stage}_run_specs"
@@ -888,10 +1307,9 @@ def get_required_stage_1_run_specs(
             selected_specs.append(dict(spec))
 
     if not selected_specs:
-        raise ValueError(
-            "The simulation plan has no required Stage-1 runs for "
-            f"hyperparameter configuration {hp_configuration_id!r}."
-        )
+        # Random-count plans may legitimately assign no work to a known HP,
+        # and an all-zero Poisson plan assigns no work to any HP.
+        return []
     return selected_specs
 
 
@@ -1023,10 +1441,8 @@ def get_required_stage_2_run_specs(
             selected_specs.append(dict(spec))
 
     if not selected_specs:
-        raise ValueError(
-            "The Stage-2 plan has no required runs for "
-            f"hyperparameter configuration {hp_configuration_id!r}."
-        )
+        # Treat a known HP with no sampled appearances as a completed no-op.
+        return []
     return selected_specs
 
 
@@ -1054,11 +1470,11 @@ def build_stage_2_plan(
     stage_1_plan,
     config,
 ):
-    if stage_1_plan.get("method") != "two_stage_tuning":
+    method = stage_1_plan.get("method")
+    if method not in TWO_STAGE_METHODS:
         raise ValueError(
             "A two-stage Stage-2 plan must be built from a "
-            "two_stage_tuning Stage-1 plan; got "
-            f"{stage_1_plan.get('method')!r}."
+            f"recognized two-stage Stage-1 plan; got {method!r}."
         )
     configured_hp_ids = [
         str(hp_id)
@@ -1092,15 +1508,22 @@ def build_stage_2_plan(
         two_stage_settings.stage_2_expected_trials
     )
 
-    stage_2_gamma = _solve_gamma_for_conditional_mean(
-        eta=config.eta,
-        m=1,
-        target_mean=stage_2_expected_k,
-    )
-    stage_2_tnb = TNBDistribution(
-        config.eta,
-        stage_2_gamma,
-    )
+    sampling_distribution = _sampling_distribution_for_method(method)
+    if sampling_distribution == "poisson":
+        stage_2_distribution = PoissonDistribution.from_mean(
+            target_mean=stage_2_expected_k
+        )
+        stage_2_gamma = None
+    else:
+        stage_2_gamma = _solve_gamma_for_conditional_mean(
+            eta=config.eta,
+            m=1,
+            target_mean=stage_2_expected_k,
+        )
+        stage_2_distribution = TNBDistribution(
+            config.eta,
+            stage_2_gamma,
+        )
 
     points = []
     total_stage_2_appearances = 0
@@ -1175,9 +1598,12 @@ def build_stage_2_plan(
             rng = np.random.default_rng(
                 np.random.SeedSequence(sampling_seed)
             )
-            sampled_k = int(
-                stage_2_tnb.sample_conditional(1, rng)
-            )
+            if sampling_distribution == "poisson":
+                sampled_k = int(stage_2_distribution.sample(rng))
+            else:
+                sampled_k = int(
+                    stage_2_distribution.sample_conditional(1, rng)
+                )
             sampled_survivor_directories = (
                 rng.choice(
                     survivor_directories,
@@ -1246,11 +1672,45 @@ def build_stage_2_plan(
 
         stage_2_point = {
             "stage_1_E_K": float(stage_1_point["E_K"]),
-            "stage_1_gamma": float(stage_1_point["gamma"]),
             "stage_2_E_K": stage_2_expected_k,
-            "stage_2_gamma": float(stage_2_gamma),
             "trials": stage_2_trials,
         }
+        if sampling_distribution == "poisson":
+            stage_2_point.update(
+                {
+                    "stage_1_poisson_rate": float(
+                        stage_1_point["poisson_rate"]
+                    ),
+                    "stage_1_conditioning_threshold": int(
+                        stage_1_point["conditioning_threshold"]
+                    ),
+                    "stage_1_conditioning_probability": float(
+                        stage_1_point["conditioning_probability"]
+                    ),
+                    "stage_1_log_expected_binomial": float(
+                        stage_1_point["log_expected_binomial"]
+                    ),
+                    "stage_2_poisson_rate": float(
+                        stage_2_distribution.mu
+                    ),
+                    "stage_2_probability_K_zero": float(
+                        stage_2_distribution.probability_zero()
+                    ),
+                    "stage_1_expected_K_semantics": (
+                        "conditional_mean"
+                    ),
+                    "stage_2_expected_K_semantics": (
+                        "unconditioned_mean"
+                    ),
+                }
+            )
+        else:
+            stage_2_point.update(
+                {
+                    "stage_1_gamma": float(stage_1_point["gamma"]),
+                    "stage_2_gamma": float(stage_2_gamma),
+                }
+            )
         for key in PRIVACY_MATCHED_POINT_METADATA_FIELDS:
             if key in stage_1_point:
                 stage_2_point[key] = copy.deepcopy(
@@ -1318,8 +1778,9 @@ def build_stage_2_plan(
         )
 
     stage_2_plan = {
-        "method": "two_stage_tuning",
-        "selection_method": "papernot_top1",
+        "method": method,
+        "selection_method": _selection_method_for_method(method),
+        "sampling_distribution": sampling_distribution,
         "eta": float(config.eta),
         "run_id": str(config.run_id),
         "plan_seed": int(config.seed),
@@ -1352,12 +1813,20 @@ def build_stage_2_plan(
     }
     if "plan_type" in stage_1_plan:
         stage_2_plan["plan_type"] = stage_1_plan["plan_type"]
+    if "selection_signature" in stage_1_plan:
+        stage_2_plan["selection_signature"] = copy.deepcopy(
+            stage_1_plan["selection_signature"]
+        )
+    if sampling_distribution == "poisson":
+        stage_2_plan["stage_2_k_zero_fallback"] = (
+            _poisson_k_zero_fallback(config)
+        )
     return stage_2_plan
 
 def generate_stage_2_plan(
     stage_1_plan,
     config,
-    plan_filename="two_stage_tuning_stage_2.JSON",
+    plan_filename=None,
     *,
     plan_directory=None,
 ):
@@ -1365,6 +1834,8 @@ def generate_stage_2_plan(
         stage_1_plan,
         config,
     )
+    if plan_filename is None:
+        plan_filename = PLAN_FILENAMES[stage_2_plan["method"]][2]
     if plan_directory is None:
         plan_directory = (
             Path(config.output.results_root)
@@ -1529,14 +2000,14 @@ def _privacy_calibration_settings(config, target_epsilon):
     }
 
 
-def _epsilon_for_noise_multiplier(
+def _selection_result_for_noise_multiplier(
     config,
     method,
     expected_num_trials,
     noise_multiplier,
     settings,
 ):
-    """Evaluate end-to-end HPO epsilon for one candidate sigma."""
+    """Return the end-to-end HPO RDP result for one candidate sigma."""
     common_config = {
         "data_sampling_rate": settings["sampling_rate"],
         "sigma_gaussian": float(noise_multiplier),
@@ -1557,14 +2028,23 @@ def _epsilon_for_noise_multiplier(
     )
 
     eta = float(config.experiment.eta)
+    if method in PAPERNOT_METHODS:
+        complete_base_curve = rdp_utils.compose_rdp_curves(
+            stage_1_curve,
+            stage_2_curve,
+        )
     if method == "papernot_baseline":
         selection_result = selection_accounting.compute_top1_rdp(
-            base_rdp_curve=rdp_utils.compose_rdp_curves(
-                stage_1_curve,
-                stage_2_curve,
-            ),
+            base_rdp_curve=complete_base_curve,
             expected_num_trials=expected_num_trials,
             eta=eta,
+        )
+    elif method == "papernot_poisson_baseline":
+        selection_result = (
+            selection_accounting.compute_top1_rdp_poisson(
+                base_rdp_curve=complete_base_curve,
+                expected_num_trials=expected_num_trials,
+            )
         )
     elif method == "two_stage_tuning":
         two_stage_settings = get_two_stage_settings(config.experiment)
@@ -1579,8 +2059,40 @@ def _epsilon_for_noise_multiplier(
             eta_stage_1=eta,
             eta_stage_2=eta,
         )
+    elif method == "two_stage_poisson_tuning":
+        two_stage_settings = get_two_stage_settings(config.experiment)
+        selection_result = (
+            selection_accounting.compute_two_stage_rdp_poisson(
+                stage_1_base_rdp_curve=stage_1_curve,
+                stage_2_base_rdp_curve=stage_2_curve,
+                m=two_stage_settings.num_survivors,
+                expected_num_trials_stage_1=expected_num_trials,
+                expected_num_trials_stage_2=(
+                    two_stage_settings.stage_2_expected_trials
+                ),
+            )
+        )
     else:
         raise ValueError(f"Unknown privacy-calibration method {method!r}.")
+
+    return selection_result
+
+
+def _epsilon_for_noise_multiplier(
+    config,
+    method,
+    expected_num_trials,
+    noise_multiplier,
+    settings,
+):
+    """Evaluate end-to-end HPO epsilon for one candidate sigma."""
+    selection_result = _selection_result_for_noise_multiplier(
+        config=config,
+        method=method,
+        expected_num_trials=expected_num_trials,
+        noise_multiplier=noise_multiplier,
+        settings=settings,
+    )
 
     return rdp_utils.convert_rdp_to_approx_dp(
         selection_result.rdp_curve,
@@ -1699,7 +2211,7 @@ def _calibrate_noise_multiplier(
             f"({upper_result.best_order}). Expand the order range."
         )
 
-    return {
+    calibration = {
         "method": method,
         "target_epsilon": target_epsilon,
         "achieved_epsilon": float(upper_result.epsilon),
@@ -1713,6 +2225,99 @@ def _calibrate_noise_multiplier(
         "accountant_evaluations": evaluations,
         "accounting_method": "numerical",
     }
+    if method == "papernot_poisson_baseline":
+        selection_result = _selection_result_for_noise_multiplier(
+            config=config,
+            method=method,
+            expected_num_trials=expected_num_trials,
+            noise_multiplier=upper_sigma,
+            settings=settings,
+        )
+        target_index = int(
+            np.flatnonzero(
+                np.isclose(
+                    selection_result.rdp_curve.orders,
+                    upper_result.best_order,
+                    rtol=0.0,
+                    atol=1e-12,
+                )
+            )[0]
+        )
+        source_order = float(
+            selection_result.envelope_source_orders[target_index]
+        )
+        source_index = int(
+            np.flatnonzero(
+                np.isclose(
+                    selection_result.raw_rdp_curve.orders,
+                    source_order,
+                    rtol=0.0,
+                    atol=1e-12,
+                )
+            )[0]
+        )
+        calibration["poisson_theorem_6"] = {
+            "poisson_mean": float(expected_num_trials),
+            "output_renyi_order": float(upper_result.best_order),
+            "theorem_source_order": source_order,
+            "base_rdp_epsilon": float(
+                selection_result.base_rdp_curve.epsilons[source_index]
+            ),
+            "hat_epsilon": float(
+                selection_result.hat_epsilons[source_index]
+            ),
+            "hat_delta": float(
+                selection_result.hat_deltas[source_index]
+            ),
+            "best_auxiliary_renyi_order": float(
+                selection_result.best_auxiliary_orders[source_index]
+            ),
+            "raw_theorem_rdp_epsilon": float(
+                selection_result.raw_rdp_curve.epsilons[source_index]
+            ),
+            "enveloped_rdp_epsilon": float(
+                selection_result.rdp_curve.epsilons[target_index]
+            ),
+            "final_conversion_delta": float(upper_result.delta),
+            "rdp_to_dp_exponent_sign": (
+                "base_rdp_epsilon_minus_hat_epsilon"
+            ),
+        }
+    elif method == "two_stage_poisson_tuning":
+        selection_result = _selection_result_for_noise_multiplier(
+            config=config,
+            method=method,
+            expected_num_trials=expected_num_trials,
+            noise_multiplier=upper_sigma,
+            settings=settings,
+        )
+        stage_1_distribution = selection_result.stage_1.distribution
+        stage_2_distribution = selection_result.stage_2.distribution
+        calibration["poisson_two_stage"] = {
+            "stage_1_expected_num_trials": float(expected_num_trials),
+            "stage_1_poisson_rate": float(stage_1_distribution.mu),
+            "stage_1_conditioning_threshold": int(
+                selection_result.stage_1.m
+            ),
+            "stage_1_conditioning_probability": float(
+                stage_1_distribution.survival_probability(
+                    selection_result.stage_1.m
+                )
+            ),
+            "stage_1_log_expected_binomial": float(
+                selection_result.stage_1.log_expected_binomial
+            ),
+            "stage_2_expected_num_trials": float(
+                stage_2_distribution.mu
+            ),
+            "stage_2_poisson_rate": float(stage_2_distribution.mu),
+            "stage_2_probability_K_zero": float(
+                stage_2_distribution.probability_zero()
+            ),
+            "stage_1_conditioning": "K1 >= m",
+            "stage_2_conditioning": "none",
+        }
+    return calibration
 
 
 def get_sigma_for_target_epsilon_papernot(
@@ -1724,6 +2329,20 @@ def get_sigma_for_target_epsilon_papernot(
     return _calibrate_noise_multiplier(
         config=config,
         method="papernot_baseline",
+        target_epsilon=target_epsilon,
+        expected_num_trials=E_k,
+    )["noise_multiplier"]
+
+
+def get_sigma_for_target_epsilon_papernot_poisson(
+    config,
+    target_epsilon,
+    E_k,
+):
+    """Return Poisson Papernot's sigma for one (epsilon, E[K])."""
+    return _calibrate_noise_multiplier(
+        config=config,
+        method="papernot_poisson_baseline",
         target_epsilon=target_epsilon,
         expected_num_trials=E_k,
     )["noise_multiplier"]
@@ -1743,10 +2362,29 @@ def get_sigma_for_target_epsilon_two_stage(
     )["noise_multiplier"]
 
 
+def get_sigma_for_target_epsilon_two_stage_poisson(
+    config,
+    target_epsilon,
+    E_k,
+):
+    """Return Poisson two-stage sigma for one (epsilon, E[K1])."""
+    return _calibrate_noise_multiplier(
+        config=config,
+        method="two_stage_poisson_tuning",
+        target_epsilon=target_epsilon,
+        expected_num_trials=E_k,
+    )["noise_multiplier"]
+
+
 def _path_value_slug(value, name):
     value = _validate_positive_finite(value, name)
     text = np.format_float_positional(value, trim="-")
     return text.replace(".", "p")
+
+
+def get_privacy_matched_value_slug(value, name="value"):
+    """Return the canonical path slug used for privacy coordinates."""
+    return _path_value_slug(value, name)
 
 
 def get_privacy_matched_plan_directory(
@@ -1829,7 +2467,7 @@ def generate_privacy_matched_plan(
         target_epsilon=target_epsilon,
         expected_num_trials=E_k,
     )
-    if method == "papernot_baseline":
+    if method in PAPERNOT_METHODS:
         m = 1
     else:
         m = get_two_stage_settings(exp_config).num_survivors
@@ -1844,7 +2482,7 @@ def generate_privacy_matched_plan(
         "best_renyi_order": calibration["best_renyi_order"],
         "privacy_calibration": calibration,
     }
-    if method == "two_stage_tuning":
+    if method in TWO_STAGE_METHODS:
         two_stage_settings = get_two_stage_settings(exp_config)
         point_metadata.update(
             {
@@ -1865,7 +2503,10 @@ def generate_privacy_matched_plan(
         exp_config.hp_configuration_ids,
         plan_filename,
         point_metadata=[point_metadata],
-        plan_metadata={"plan_type": "privacy_matched"},
+        plan_metadata={
+            "plan_type": "privacy_matched",
+            "selection_signature": get_selection_signature(config),
+        },
         plan_directory=get_privacy_matched_plan_directory(
             config=config,
             method=method,
@@ -1922,6 +2563,7 @@ def load_privacy_matched_simulation_plan(config, stage):
             for hp_id in exp_config.hp_configuration_ids
         ],
         "eta": float(exp_config.eta),
+        "selection_signature": get_selection_signature(config),
     }
     for key, expected_value in metadata_checks.items():
         if plan.get(key) != expected_value:
@@ -1931,9 +2573,52 @@ def load_privacy_matched_simulation_plan(config, stage):
                 f"requires {expected_value!r}. Regenerate the plan."
             )
 
+    expected_sampling_distribution = _sampling_distribution_for_method(
+        method
+    )
+    observed_sampling_distribution = plan.get(
+        "sampling_distribution",
+        "tnb",
+    )
+    if observed_sampling_distribution != expected_sampling_distribution:
+        raise ValueError(
+            f"Privacy-matched plan {plan_filename} has "
+            "sampling_distribution="
+            f"{observed_sampling_distribution!r}, "
+            f"expected {expected_sampling_distribution!r}. Regenerate the "
+            "plan."
+        )
+    if method == "papernot_poisson_baseline":
+        if plan.get("selection_method") != "papernot_poisson_top1":
+            raise ValueError(
+                f"Privacy-matched plan {plan_filename} must use "
+                "selection_method='papernot_poisson_top1'."
+            )
+        expected_fallback = _poisson_k_zero_fallback(exp_config)
+        if plan.get("k_zero_fallback") != expected_fallback:
+            raise ValueError(
+                f"Privacy-matched plan {plan_filename} has a stale or "
+                "invalid K=0 fallback definition. Regenerate the plan."
+            )
+    elif method == "two_stage_poisson_tuning":
+        if plan.get("selection_method") != (
+            "papernot_poisson_top_m_then_top1"
+        ):
+            raise ValueError(
+                f"Privacy-matched plan {plan_filename} must use the "
+                "Poisson two-stage selection method."
+            )
+        if stage == 2 and plan.get("stage_2_k_zero_fallback") != (
+            _poisson_k_zero_fallback(exp_config)
+        ):
+            raise ValueError(
+                f"Privacy-matched plan {plan_filename} has an invalid "
+                "Stage-2 K=0 fallback definition. Regenerate the plan."
+            )
+
     expected_top_m = (
         1
-        if method == "papernot_baseline"
+        if method in PAPERNOT_METHODS
         else get_two_stage_settings(exp_config).num_survivors
     )
     if plan.get("stage_1_top_m") != expected_top_m:
@@ -1965,6 +2650,44 @@ def load_privacy_matched_simulation_plan(config, stage):
             f"Privacy-matched plan {plan_filename} must contain "
             f"{configured_num_trials} trials. Regenerate the plan."
         )
+    if method == "papernot_poisson_baseline":
+        require_probability_zero = math.exp(-E_k)
+        observed_probability_zero = point.get("probability_K_zero")
+        if (
+            not isinstance(observed_probability_zero, (int, float))
+            or not math.isclose(
+                float(observed_probability_zero),
+                require_probability_zero,
+                rel_tol=1e-12,
+                abs_tol=1e-15,
+            )
+        ):
+            raise ValueError(
+                f"Privacy-matched plan {plan_filename} has an invalid "
+                "probability_K_zero. Regenerate the plan."
+            )
+        for trial_index, trial in enumerate(trials):
+            sampled_k = trial.get("sampled_K")
+            if (
+                isinstance(sampled_k, bool)
+                or not isinstance(sampled_k, int)
+                or sampled_k < 0
+            ):
+                raise ValueError(
+                    f"Privacy-matched Poisson trial {trial_index} has "
+                    f"invalid sampled_K={sampled_k!r}."
+                )
+            for field in (
+                "sampled_hp_configuration_ids",
+                "sampled_stage_1_runs",
+                "sampled_stage_2_runs",
+            ):
+                values = trial.get(field)
+                if not isinstance(values, list) or len(values) != sampled_k:
+                    raise ValueError(
+                        f"Privacy-matched Poisson trial {trial_index} has "
+                        f"{field} inconsistent with sampled_K={sampled_k}."
+                    )
 
     def require_matching_float(mapping, key, expected, context):
         try:
@@ -1991,7 +2714,7 @@ def load_privacy_matched_simulation_plan(config, stage):
     point_context = f"Privacy-matched plan {plan_filename} point"
     stage_1_E_k_key = (
         "stage_1_E_K"
-        if stage == 2 and method == "two_stage_tuning"
+    if stage == 2 and method in TWO_STAGE_METHODS
         else "E_K"
     )
     require_matching_float(
@@ -2049,7 +2772,7 @@ def load_privacy_matched_simulation_plan(config, stage):
             calibration_context,
         )
 
-    if stage == 2 and method == "two_stage_tuning":
+    if stage == 2 and method in TWO_STAGE_METHODS:
         two_stage_settings = get_two_stage_settings(exp_config)
         require_matching_float(
             point,
@@ -2061,6 +2784,70 @@ def load_privacy_matched_simulation_plan(config, stage):
             raise ValueError(
                 f"Privacy-matched plan {plan_filename} must have "
                 "stage_2_selection_m=1. Regenerate the plan."
+            )
+
+    if method == "two_stage_poisson_tuning":
+        two_stage_settings = get_two_stage_settings(exp_config)
+        stage_1_distribution = PoissonDistribution.from_conditional_mean(
+            m=two_stage_settings.num_survivors,
+            target_mean=E_k,
+        )
+        rate_key = (
+            "poisson_rate"
+            if stage == 1
+            else "stage_1_poisson_rate"
+        )
+        require_matching_float(
+            point,
+            rate_key,
+            stage_1_distribution.mu,
+            point_context,
+        )
+        minimum_k = (
+            two_stage_settings.num_survivors if stage == 1 else 0
+        )
+        for trial_index, trial in enumerate(trials):
+            sampled_trial = trial if stage == 1 else trial["trial_stage_2"]
+            sampled_k = sampled_trial.get("sampled_K")
+            if (
+                isinstance(sampled_k, bool)
+                or not isinstance(sampled_k, int)
+                or sampled_k < minimum_k
+            ):
+                raise ValueError(
+                    f"Privacy-matched Poisson two-stage trial "
+                    f"{trial_index} has invalid sampled_K={sampled_k!r}."
+                )
+            run_field = (
+                "sampled_stage_1_runs"
+                if stage == 1
+                else "sampled_stage_2_runs"
+            )
+            run_entries = sampled_trial.get(run_field)
+            if (
+                not isinstance(run_entries, list)
+                or len(run_entries) != sampled_k
+            ):
+                raise ValueError(
+                    f"Privacy-matched Poisson two-stage trial "
+                    f"{trial_index} has {run_field} inconsistent with "
+                    "sampled_K."
+                )
+        if stage == 2:
+            stage_2_expected_k = (
+                two_stage_settings.stage_2_expected_trials
+            )
+            require_matching_float(
+                point,
+                "stage_2_poisson_rate",
+                stage_2_expected_k,
+                point_context,
+            )
+            require_matching_float(
+                point,
+                "stage_2_probability_K_zero",
+                math.exp(-stage_2_expected_k),
+                point_context,
             )
 
     execution_summary = plan.get("execution_summary")

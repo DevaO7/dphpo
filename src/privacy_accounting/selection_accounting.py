@@ -1,5 +1,5 @@
 """
-Papernot-Steinke top-m and two-stage selection privacy accounting.
+Papernot-Steinke selection privacy accounting.
 
 This module operates only on precomputed RDP curves. It does not know how
 the base mechanism was implemented: the curve may come from DP-FedAvg or
@@ -25,6 +25,13 @@ distribution.
 Top-1 is implemented as the special case m = 1. A two-stage mechanism is
 implemented by calling the same top-m accountant for stage 1, calling it
 again with m = 1 for stage 2, and composing the two resulting RDP curves.
+
+The unconditioned Poisson top-1 accountant is a separate implementation of
+Theorem 6 from Papernot and Steinke (2022). The conditioned Poisson top-m
+accountant implements the corresponding top-m theorem for
+``K = K0 | K0 >= m``. A Poisson two-stage mechanism composes conditioned
+top-m Stage 1 with unconditioned top-1 Stage 2, whose ``K0 = 0`` outcome is
+handled by a public data-independent fallback.
 """
 
 from __future__ import annotations
@@ -41,6 +48,7 @@ from .rdp_utils import (
     apply_renyi_monotonicity_envelope,
     compose_rdp_curves,
 )
+from .poisson import PoissonDistribution
 from .tnb import TNBDistribution
 from .validation import validate_eta, validate_positive_integer
 
@@ -257,6 +265,515 @@ class TwoStageResult:
     stage_1: TopMResult
     stage_2: TopMResult
     monotonicity_applied: bool
+
+
+def _readonly_float_array(values: ArrayLike, name: str) -> FloatArray:
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 1 or array.size == 0:
+        raise ValueError(f"{name} must be a non-empty one-dimensional array.")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values.")
+    array = np.array(array, dtype=float, copy=True)
+    array.setflags(write=False)
+    return array
+
+
+@dataclass(frozen=True, slots=True)
+class PoissonTop1Result:
+    """Theorem-6 Poisson top-1 curve and conversion diagnostics."""
+
+    rdp_curve: RdpCurve
+    raw_rdp_curve: RdpCurve
+    base_rdp_curve: RdpCurve
+    distribution: PoissonDistribution
+    hat_epsilons: FloatArray
+    hat_deltas: FloatArray
+    best_auxiliary_orders: FloatArray
+    envelope_source_orders: FloatArray
+    monotonicity_applied: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.base_rdp_curve, RdpCurve):
+            raise TypeError("base_rdp_curve must be an RdpCurve.")
+        if not isinstance(self.distribution, PoissonDistribution):
+            raise TypeError("distribution must be a PoissonDistribution.")
+        for curve_name in ("raw_rdp_curve", "rdp_curve"):
+            curve = getattr(self, curve_name)
+            if not isinstance(curve, RdpCurve):
+                raise TypeError(f"{curve_name} must be an RdpCurve.")
+            if not np.array_equal(
+                curve.orders,
+                self.base_rdp_curve.orders,
+            ):
+                raise ValueError(
+                    f"{curve_name} must use the base RDP order grid."
+                )
+        expected_shape = self.base_rdp_curve.orders.shape
+        for field_name in (
+            "hat_epsilons",
+            "hat_deltas",
+            "best_auxiliary_orders",
+            "envelope_source_orders",
+        ):
+            array = _readonly_float_array(
+                getattr(self, field_name),
+                field_name,
+            )
+            if array.shape != expected_shape:
+                raise ValueError(
+                    f"{field_name} must match the base RDP order grid."
+                )
+            object.__setattr__(self, field_name, array)
+        if np.any(self.hat_epsilons < 0.0):
+            raise ValueError("hat_epsilons must be nonnegative.")
+        if np.any((self.hat_deltas < 0.0) | (self.hat_deltas > 1.0)):
+            raise ValueError("hat_deltas must lie in [0, 1].")
+        if np.any(self.best_auxiliary_orders <= 1.0):
+            raise ValueError("best_auxiliary_orders must exceed 1.")
+        if np.any(self.envelope_source_orders < self.rdp_curve.orders):
+            raise ValueError(
+                "An RDP envelope source order cannot be below its target order."
+            )
+
+    @property
+    def mu(self) -> float:
+        return self.distribution.mu
+
+
+@dataclass(frozen=True, slots=True)
+class PoissonTopMResult:
+    """Conditioned-Poisson top-m curve and conversion diagnostics."""
+
+    rdp_curve: RdpCurve
+    raw_rdp_curve: RdpCurve
+    base_rdp_curve: RdpCurve
+    distribution: PoissonDistribution
+    m: int
+    expected_num_trials: float
+    log_expected_binomial: float
+    hat_epsilons: FloatArray
+    hat_deltas: FloatArray
+    best_auxiliary_orders: FloatArray
+    envelope_source_orders: FloatArray
+    monotonicity_applied: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.base_rdp_curve, RdpCurve):
+            raise TypeError("base_rdp_curve must be an RdpCurve.")
+        if not isinstance(self.distribution, PoissonDistribution):
+            raise TypeError("distribution must be a PoissonDistribution.")
+        object.__setattr__(
+            self,
+            "m",
+            validate_positive_integer(self.m, "m"),
+        )
+        expected_num_trials = float(self.expected_num_trials)
+        if (
+            not math.isfinite(expected_num_trials)
+            or expected_num_trials <= self.m
+        ):
+            raise ValueError(
+                "expected_num_trials must be finite and strictly greater "
+                "than m for conditioned-Poisson top-m accounting."
+            )
+        object.__setattr__(
+            self,
+            "expected_num_trials",
+            expected_num_trials,
+        )
+        log_expected_binomial = float(self.log_expected_binomial)
+        if (
+            not math.isfinite(log_expected_binomial)
+            or log_expected_binomial < 0.0
+        ):
+            raise ValueError(
+                "log_expected_binomial must be finite and nonnegative."
+            )
+        object.__setattr__(
+            self,
+            "log_expected_binomial",
+            log_expected_binomial,
+        )
+        for curve_name in ("raw_rdp_curve", "rdp_curve"):
+            curve = getattr(self, curve_name)
+            if not isinstance(curve, RdpCurve):
+                raise TypeError(f"{curve_name} must be an RdpCurve.")
+            if not np.array_equal(
+                curve.orders,
+                self.base_rdp_curve.orders,
+            ):
+                raise ValueError(
+                    f"{curve_name} must use the base RDP order grid."
+                )
+        expected_shape = self.base_rdp_curve.orders.shape
+        for field_name in (
+            "hat_epsilons",
+            "hat_deltas",
+            "best_auxiliary_orders",
+            "envelope_source_orders",
+        ):
+            array = _readonly_float_array(
+                getattr(self, field_name),
+                field_name,
+            )
+            if array.shape != expected_shape:
+                raise ValueError(
+                    f"{field_name} must match the base RDP order grid."
+                )
+            object.__setattr__(self, field_name, array)
+        if np.any(self.hat_epsilons < 0.0):
+            raise ValueError("hat_epsilons must be nonnegative.")
+        if np.any((self.hat_deltas < 0.0) | (self.hat_deltas > 1.0)):
+            raise ValueError("hat_deltas must lie in [0, 1].")
+        if np.any(self.best_auxiliary_orders <= 1.0):
+            raise ValueError("best_auxiliary_orders must exceed 1.")
+        if np.any(self.envelope_source_orders < self.rdp_curve.orders):
+            raise ValueError(
+                "An RDP envelope source order cannot be below its target "
+                "order."
+            )
+
+    @property
+    def mu(self) -> float:
+        """Return the underlying, unconditioned Poisson rate."""
+        return self.distribution.mu
+
+
+@dataclass(frozen=True, slots=True)
+class PoissonTwoStageResult:
+    """RDP result for conditioned top-m then unconditioned top-1."""
+
+    rdp_curve: RdpCurve
+    stage_1: PoissonTopMResult
+    stage_2: PoissonTop1Result
+    monotonicity_applied: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rdp_curve, RdpCurve):
+            raise TypeError("rdp_curve must be an RdpCurve.")
+        if not isinstance(self.stage_1, PoissonTopMResult):
+            raise TypeError("stage_1 must be a PoissonTopMResult.")
+        if not isinstance(self.stage_2, PoissonTop1Result):
+            raise TypeError("stage_2 must be a PoissonTop1Result.")
+        if not np.array_equal(
+            self.rdp_curve.orders,
+            self.stage_1.rdp_curve.orders,
+        ):
+            raise ValueError(
+                "The composed curve must use the Stage-1 RDP order grid."
+            )
+
+
+def _normalize_auxiliary_orders(
+    base_rdp_curve: RdpCurve,
+    auxiliary_orders: Optional[ArrayLike],
+) -> FloatArray:
+    if auxiliary_orders is None:
+        return np.array(base_rdp_curve.orders, dtype=float, copy=True)
+    orders = np.asarray(auxiliary_orders, dtype=float)
+    if orders.ndim != 1 or orders.size == 0:
+        raise ValueError(
+            "auxiliary_orders must be a non-empty one-dimensional array."
+        )
+    if not np.all(np.isfinite(orders)) or np.any(orders <= 1.0):
+        raise ValueError(
+            "Every auxiliary order must be finite and greater than 1."
+        )
+    orders = np.unique(orders)
+    for order in orders:
+        try:
+            base_rdp_curve.epsilon_at(float(order))
+        except KeyError as error:
+            raise ValueError(
+                f"Auxiliary order {float(order)} is not stored in the "
+                "base RDP curve."
+            ) from error
+    return np.array(orders, dtype=float, copy=True)
+
+
+def _renyi_envelope_source_indices(epsilons: FloatArray) -> NDArray[np.int64]:
+    """Return the raw higher-order bound used at every target order."""
+    source_indices = np.empty(epsilons.size, dtype=np.int64)
+    best_index = epsilons.size - 1
+    for index in range(epsilons.size - 1, -1, -1):
+        if epsilons[index] <= epsilons[best_index]:
+            best_index = index
+        source_indices[index] = best_index
+    return source_indices
+
+
+def _compute_poisson_hat_delta_diagnostics(
+    *,
+    base_rdp_curve: RdpCurve,
+    target_orders: FloatArray,
+    auxiliary_orders: Optional[ArrayLike],
+) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """Optimize the common RDP-to-approximate-DP term over orders."""
+    normalized_auxiliary_orders = _normalize_auxiliary_orders(
+        base_rdp_curve,
+        auxiliary_orders,
+    )
+    auxiliary_epsilons = np.asarray(
+        [
+            base_rdp_curve.epsilon_at(float(order))
+            for order in normalized_auxiliary_orders
+        ],
+        dtype=float,
+    )
+
+    # Equality is optimal in the theorem condition: increasing
+    # hat_epsilon decreases the converted hat_delta.
+    hat_epsilons = np.log1p(1.0 / (target_orders - 1.0))
+    alpha_minus_one = normalized_auxiliary_orders - 1.0
+    log_conversion_constants = (
+        -np.log(normalized_auxiliary_orders)
+        + alpha_minus_one
+        * np.log1p(-1.0 / normalized_auxiliary_orders)
+    )
+    log_hat_delta_candidates = (
+        log_conversion_constants[:, None]
+        + alpha_minus_one[:, None]
+        * (
+            auxiliary_epsilons[:, None]
+            - hat_epsilons[None, :]
+        )
+    )
+    best_auxiliary_indices = np.argmin(
+        log_hat_delta_candidates,
+        axis=0,
+    )
+    best_log_hat_deltas = log_hat_delta_candidates[
+        best_auxiliary_indices,
+        np.arange(target_orders.size),
+    ]
+    hat_deltas = np.exp(np.minimum(best_log_hat_deltas, 0.0))
+    best_auxiliary_orders = normalized_auxiliary_orders[
+        best_auxiliary_indices
+    ]
+    return (
+        np.asarray(hat_epsilons, dtype=float),
+        np.asarray(hat_deltas, dtype=float),
+        np.asarray(best_auxiliary_orders, dtype=float),
+    )
+
+
+def compute_top1_rdp_poisson(
+    base_rdp_curve: RdpCurve,
+    *,
+    expected_num_trials: float,
+    auxiliary_orders: Optional[ArrayLike] = None,
+    apply_monotonicity: bool = True,
+) -> PoissonTop1Result:
+    r"""Compute Papernot--Steinke Theorem 6 for ``K ~ Poisson(mu)``.
+
+    At output order :math:`\lambda`, Theorem 6 gives
+
+    .. math::
+
+        \varepsilon_A(\lambda)
+        = \varepsilon_Q(\lambda) + \mu\hat\delta
+          + \frac{\log\mu}{\lambda-1},
+
+    provided ``Q`` is also ``(hat_epsilon, hat_delta)``-DP and
+    ``exp(hat_epsilon) <= 1 + 1 / (lambda - 1)``.  We use the largest
+    admissible ``hat_epsilon`` and derive ``hat_delta`` from every stored
+    auxiliary RDP order ``alpha`` using the tight RDP-to-DP conversion
+
+    .. math::
+
+        \hat\delta = \frac1\alpha
+        (1-1/\alpha)^{\alpha-1}
+        \exp((\alpha-1)(\varepsilon_Q(\alpha)-\hat\varepsilon)).
+
+    The sign in the exponent is therefore base RDP epsilon minus the
+    requested approximate-DP epsilon.  A value above one is replaced by
+    the valid trivial guarantee ``hat_delta = 1``.
+    """
+    if not isinstance(base_rdp_curve, RdpCurve):
+        raise TypeError("base_rdp_curve must be an RdpCurve.")
+    distribution = PoissonDistribution(expected_num_trials)
+    target_orders = np.asarray(base_rdp_curve.orders, dtype=float)
+    (
+        hat_epsilons,
+        hat_deltas,
+        best_auxiliary_orders,
+    ) = _compute_poisson_hat_delta_diagnostics(
+        base_rdp_curve=base_rdp_curve,
+        target_orders=target_orders,
+        auxiliary_orders=auxiliary_orders,
+    )
+
+    raw_epsilons = (
+        base_rdp_curve.epsilons
+        + distribution.mu * hat_deltas
+        + math.log(distribution.mu) / (target_orders - 1.0)
+    )
+    # RDP is nonnegative. This also removes negligible negative roundoff in
+    # otherwise valid theorem bounds for very small means.
+    raw_epsilons = np.maximum(raw_epsilons, 0.0)
+    raw_curve = RdpCurve(
+        orders=target_orders,
+        epsilons=raw_epsilons,
+    )
+
+    if apply_monotonicity:
+        source_indices = _renyi_envelope_source_indices(raw_epsilons)
+        rdp_curve = apply_renyi_monotonicity_envelope(raw_curve)
+    else:
+        source_indices = np.arange(target_orders.size, dtype=np.int64)
+        rdp_curve = raw_curve
+
+    return PoissonTop1Result(
+        rdp_curve=rdp_curve,
+        raw_rdp_curve=raw_curve,
+        base_rdp_curve=base_rdp_curve,
+        distribution=distribution,
+        hat_epsilons=hat_epsilons,
+        hat_deltas=hat_deltas,
+        best_auxiliary_orders=best_auxiliary_orders,
+        envelope_source_orders=target_orders[source_indices],
+        monotonicity_applied=bool(apply_monotonicity),
+    )
+
+
+def compute_top_m_rdp_poisson(
+    base_rdp_curve: RdpCurve,
+    *,
+    m: int,
+    expected_num_trials: float,
+    auxiliary_orders: Optional[ArrayLike] = None,
+    apply_monotonicity: bool = True,
+) -> PoissonTopMResult:
+    r"""Compute conditioned-Poisson top-m RDP accounting.
+
+    ``expected_num_trials`` is the conditional expected count
+
+    .. math::
+
+        \mathbb E[K_0 \mid K_0 \ge m].
+
+    The underlying Poisson rate ``mu`` is calibrated to this target. At
+    output order :math:`\lambda`, the theorem gives
+
+    .. math::
+
+        \varepsilon_A(\lambda)
+        = m\varepsilon_Q(\lambda)
+          + \mu\hat\delta
+          + \frac{\log\mathbb E[\binom K m]}{\lambda-1},
+
+    where ``K = K0 | K0 >= m``. The approximate-DP conversion and
+    auxiliary-order optimization are exactly the same as in the
+    unconditioned Papernot--Steinke Poisson top-1 accountant.
+    """
+    if not isinstance(base_rdp_curve, RdpCurve):
+        raise TypeError("base_rdp_curve must be an RdpCurve.")
+    m = validate_positive_integer(m, "m")
+    expected_num_trials = _validate_expected_num_trials(
+        expected_num_trials,
+        m=m,
+    )
+    distribution = PoissonDistribution.from_conditional_mean(
+        m=m,
+        target_mean=expected_num_trials,
+    )
+    target_orders = np.asarray(base_rdp_curve.orders, dtype=float)
+    (
+        hat_epsilons,
+        hat_deltas,
+        best_auxiliary_orders,
+    ) = _compute_poisson_hat_delta_diagnostics(
+        base_rdp_curve=base_rdp_curve,
+        target_orders=target_orders,
+        auxiliary_orders=auxiliary_orders,
+    )
+    log_expected_binomial = distribution.log_expected_binomial(m)
+    raw_epsilons = (
+        m * base_rdp_curve.epsilons
+        + distribution.mu * hat_deltas
+        + log_expected_binomial / (target_orders - 1.0)
+    )
+    raw_curve = RdpCurve(
+        orders=target_orders,
+        epsilons=np.maximum(raw_epsilons, 0.0),
+    )
+    if apply_monotonicity:
+        source_indices = _renyi_envelope_source_indices(raw_epsilons)
+        rdp_curve = apply_renyi_monotonicity_envelope(raw_curve)
+    else:
+        source_indices = np.arange(target_orders.size, dtype=np.int64)
+        rdp_curve = raw_curve
+
+    return PoissonTopMResult(
+        rdp_curve=rdp_curve,
+        raw_rdp_curve=raw_curve,
+        base_rdp_curve=base_rdp_curve,
+        distribution=distribution,
+        m=m,
+        expected_num_trials=expected_num_trials,
+        log_expected_binomial=log_expected_binomial,
+        hat_epsilons=hat_epsilons,
+        hat_deltas=hat_deltas,
+        best_auxiliary_orders=best_auxiliary_orders,
+        envelope_source_orders=target_orders[source_indices],
+        monotonicity_applied=bool(apply_monotonicity),
+    )
+
+
+def compute_two_stage_rdp_poisson(
+    stage_1_base_rdp_curve: RdpCurve,
+    stage_2_base_rdp_curve: RdpCurve,
+    *,
+    m: int,
+    expected_num_trials_stage_1: float,
+    expected_num_trials_stage_2: Optional[float] = None,
+    auxiliary_orders_stage_1: Optional[ArrayLike] = None,
+    auxiliary_orders_stage_2: Optional[ArrayLike] = None,
+    apply_monotonicity: bool = True,
+) -> PoissonTwoStageResult:
+    r"""Compose conditioned top-m Stage 1 and unconditioned top-1 Stage 2.
+
+    Stage 1 always samples at least ``m`` runs. Stage 2 uses
+    ``K2 ~ Poisson(mu2)`` without conditioning; when ``K2 = 0`` it returns
+    the mechanism's predefined data-independent fallback. Thus Stage 2 is
+    accounted using Papernot--Steinke Theorem 6.
+    """
+    m = validate_positive_integer(m, "m")
+    if m <= 1:
+        raise ValueError(
+            "A nondegenerate two-stage mechanism requires m > 1."
+        )
+    if expected_num_trials_stage_2 is None:
+        expected_num_trials_stage_2 = float(m)
+
+    stage_1_result = compute_top_m_rdp_poisson(
+        stage_1_base_rdp_curve,
+        m=m,
+        expected_num_trials=expected_num_trials_stage_1,
+        auxiliary_orders=auxiliary_orders_stage_1,
+        apply_monotonicity=apply_monotonicity,
+    )
+    stage_2_result = compute_top1_rdp_poisson(
+        stage_2_base_rdp_curve,
+        expected_num_trials=expected_num_trials_stage_2,
+        auxiliary_orders=auxiliary_orders_stage_2,
+        apply_monotonicity=apply_monotonicity,
+    )
+    composed_curve = compose_rdp_curves(
+        stage_1_result.rdp_curve,
+        stage_2_result.rdp_curve,
+    )
+    if apply_monotonicity:
+        composed_curve = apply_renyi_monotonicity_envelope(
+            composed_curve
+        )
+
+    return PoissonTwoStageResult(
+        rdp_curve=composed_curve,
+        stage_1=stage_1_result,
+        stage_2=stage_2_result,
+        monotonicity_applied=bool(apply_monotonicity),
+    )
 
 
 def _find_best_hat_term(

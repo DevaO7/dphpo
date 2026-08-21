@@ -4,7 +4,7 @@ from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import torch
 from omegaconf import DictConfig
@@ -328,12 +328,21 @@ def _load_datasets(dataset_config):
 def get_data_loaders(
     config: DictConfig,
     seed: Optional[int] = None,
-) -> Tuple[DataLoader, DataLoader]:
-    """Return deterministic central train and test data loaders.
+    split_public_evaluation: bool = False,
+) -> Union[
+    Tuple[DataLoader, DataLoader],
+    Tuple[DataLoader, DataLoader, DataLoader],
+]:
+    """Return deterministic central training and public evaluation loaders.
 
     The dataset is selected exclusively by ``experiment.dataset.name``.
     Supported canonical names are ``synthetic``, ``mnist``,
     ``fashion_mnist``, ``cifar10``, and ``imdb``.
+
+    By default this preserves the legacy ``(train, test)`` API. With
+    ``split_public_evaluation=True``, the configured public test dataset is
+    deterministically divided and returned as ``(train, validation,
+    heldout_test)``.
     """
     dataset_config = _get_dataset_config(config)
     loader_seed = _resolve_loader_seed(config, seed)
@@ -366,10 +375,62 @@ def get_data_loaders(
         generator=train_generator,
         **common_loader_options,
     )
-    test_loader = DataLoader(
+    if not split_public_evaluation:
+        test_loader = DataLoader(
+            test_dataset,
+            shuffle=False,
+            drop_last=False,
+            **common_loader_options,
+        )
+        return train_loader, test_loader
+
+    split_config = dataset_config.get("public_evaluation_split")
+    if split_config is None:
+        raise ValueError(
+            "experiment.dataset.public_evaluation_split must be "
+            "configured when split_public_evaluation=True."
+        )
+    validation_fraction = float(
+        split_config.get("validation_fraction", 0.5)
+    )
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError(
+            "experiment.dataset.public_evaluation_split."
+            "validation_fraction must be strictly between 0 and 1; "
+            f"got {validation_fraction!r}."
+        )
+    split_seed = split_config.get("seed", 0)
+    if (
+        isinstance(split_seed, bool)
+        or not isinstance(split_seed, int)
+        or split_seed < 0
+    ):
+        raise ValueError(
+            "experiment.dataset.public_evaluation_split.seed must be "
+            f"a non-negative integer; got {split_seed!r}."
+        )
+    validation_size = int(len(test_dataset) * validation_fraction)
+    heldout_size = len(test_dataset) - validation_size
+    if validation_size < 1 or heldout_size < 1:
+        raise ValueError(
+            "The configured public evaluation split must produce "
+            "non-empty validation and held-out test datasets."
+        )
+    validation_dataset, heldout_test_dataset = random_split(
         test_dataset,
+        [validation_size, heldout_size],
+        generator=torch.Generator().manual_seed(split_seed),
+    )
+    validation_loader = DataLoader(
+        validation_dataset,
         shuffle=False,
         drop_last=False,
         **common_loader_options,
     )
-    return train_loader, test_loader
+    heldout_test_loader = DataLoader(
+        heldout_test_dataset,
+        shuffle=False,
+        drop_last=False,
+        **common_loader_options,
+    )
+    return train_loader, validation_loader, heldout_test_loader
