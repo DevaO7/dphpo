@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -464,6 +464,61 @@ class PoissonTwoStageResult:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class PoissonNStageResult:
+    """RDP-accounting result for a fixed multi-stage Poisson mechanism.
+
+    Every stage except the last releases an ordered top-``m`` output from
+    a Poisson count conditioned to be at least ``m``.  The last stage uses
+    the unconditioned Papernot--Steinke Poisson top-1 mechanism, including
+    its data-independent ``K = 0`` fallback.  The stage guarantees are
+    composed pointwise on one common Renyi-order grid.
+    """
+
+    rdp_curve: RdpCurve
+    stage_results: tuple[PoissonTopMResult | PoissonTop1Result, ...]
+    monotonicity_applied: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rdp_curve, RdpCurve):
+            raise TypeError("rdp_curve must be an RdpCurve.")
+        stage_results = tuple(self.stage_results)
+        if not stage_results:
+            raise ValueError("stage_results must contain at least one stage.")
+        for stage_index, stage_result in enumerate(stage_results, start=1):
+            if not isinstance(
+                stage_result,
+                (PoissonTopMResult, PoissonTop1Result),
+            ):
+                raise TypeError(
+                    "Every stage result must be PoissonTopMResult or "
+                    f"PoissonTop1Result; stage {stage_index} has "
+                    f"{type(stage_result).__name__}."
+                )
+            if not np.array_equal(
+                stage_result.rdp_curve.orders,
+                self.rdp_curve.orders,
+            ):
+                raise ValueError(
+                    f"Stage {stage_index} does not use the composed "
+                    "Renyi-order grid."
+                )
+            if (
+                stage_index < len(stage_results)
+                and not isinstance(stage_result, PoissonTopMResult)
+            ):
+                raise ValueError(
+                    "Every non-final stage must use conditioned-Poisson "
+                    "top-m accounting."
+                )
+        if not isinstance(stage_results[-1], PoissonTop1Result):
+            raise ValueError(
+                "The final stage must use the unconditioned Poisson "
+                "top-1 mechanism."
+            )
+        object.__setattr__(self, "stage_results", stage_results)
+
+
 def _normalize_auxiliary_orders(
     base_rdp_curve: RdpCurve,
     auxiliary_orders: Optional[ArrayLike],
@@ -772,6 +827,113 @@ def compute_two_stage_rdp_poisson(
         rdp_curve=composed_curve,
         stage_1=stage_1_result,
         stage_2=stage_2_result,
+        monotonicity_applied=bool(apply_monotonicity),
+    )
+
+
+def compute_n_stage_rdp_poisson(
+    base_rdp_curves: Sequence[RdpCurve],
+    *,
+    retained_counts: Sequence[int],
+    expected_num_trials: Sequence[float],
+    auxiliary_orders_by_stage: Optional[
+        Sequence[Optional[ArrayLike]]
+    ] = None,
+    apply_monotonicity: bool = True,
+) -> PoissonNStageResult:
+    r"""Compose a fixed multi-stage Poisson selection schedule.
+
+    For stages ``1, ..., L - 1``, ``expected_num_trials[l]`` denotes the
+    conditional expectation
+
+    .. math::
+
+        \bar\mu_l = E[K_{0,l} \mid K_{0,l} \ge m_l],
+
+    and the underlying Poisson rate is calibrated internally.  The final
+    stage must have ``retained_counts[-1] == 1`` and uses unconditioned
+    Poisson top-1 accounting, so its expected count is its Poisson rate and
+    ``K_L = 0`` returns the predefined data-independent fallback.
+
+    The schedule is fixed before the mechanism runs.  All stage guarantees
+    are added at the same Renyi order before applying the monotonicity
+    envelope and converting to approximate DP.
+    """
+    base_rdp_curves = tuple(base_rdp_curves)
+    retained_counts = tuple(retained_counts)
+    expected_num_trials = tuple(expected_num_trials)
+    num_stages = len(base_rdp_curves)
+    if num_stages == 0:
+        raise ValueError("base_rdp_curves must contain at least one stage.")
+    if len(retained_counts) != num_stages:
+        raise ValueError(
+            "retained_counts must contain one entry per base RDP curve."
+        )
+    if len(expected_num_trials) != num_stages:
+        raise ValueError(
+            "expected_num_trials must contain one entry per base RDP "
+            "curve."
+        )
+    if auxiliary_orders_by_stage is None:
+        auxiliary_orders = (None,) * num_stages
+    else:
+        auxiliary_orders = tuple(auxiliary_orders_by_stage)
+        if len(auxiliary_orders) != num_stages:
+            raise ValueError(
+                "auxiliary_orders_by_stage must contain one entry per "
+                "base RDP curve."
+            )
+
+    normalized_retained_counts = tuple(
+        validate_positive_integer(count, f"retained_counts[{index}]")
+        for index, count in enumerate(retained_counts)
+    )
+    if normalized_retained_counts[-1] != 1:
+        raise ValueError(
+            "The final stage must retain one output and use unconditioned "
+            "Poisson top-1 accounting."
+        )
+
+    stage_results: list[PoissonTopMResult | PoissonTop1Result] = []
+    for stage_index, (
+        base_rdp_curve,
+        retained_count,
+        stage_expected_num_trials,
+        stage_auxiliary_orders,
+    ) in enumerate(
+        zip(
+            base_rdp_curves,
+            normalized_retained_counts,
+            expected_num_trials,
+            auxiliary_orders,
+        )
+    ):
+        if stage_index == num_stages - 1:
+            stage_result = compute_top1_rdp_poisson(
+                base_rdp_curve,
+                expected_num_trials=stage_expected_num_trials,
+                auxiliary_orders=stage_auxiliary_orders,
+                apply_monotonicity=apply_monotonicity,
+            )
+        else:
+            stage_result = compute_top_m_rdp_poisson(
+                base_rdp_curve,
+                m=retained_count,
+                expected_num_trials=stage_expected_num_trials,
+                auxiliary_orders=stage_auxiliary_orders,
+                apply_monotonicity=apply_monotonicity,
+            )
+        stage_results.append(stage_result)
+
+    composed_curve = compose_rdp_curves(
+        *(stage_result.rdp_curve for stage_result in stage_results)
+    )
+    if apply_monotonicity:
+        composed_curve = apply_renyi_monotonicity_envelope(composed_curve)
+
+    return PoissonNStageResult(
+        rdp_curve=composed_curve,
+        stage_results=tuple(stage_results),
         monotonicity_applied=bool(apply_monotonicity),
     )
 

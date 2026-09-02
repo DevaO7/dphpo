@@ -87,17 +87,8 @@ def _solve_mu_for_conditional_mean(
     def objective(mu: float) -> float:
         return _conditional_mean(mu, m) - target_mean
 
-    lower = min(_MU_LOWER, target_mean / 2.0)
-    lower_value = objective(lower)
     upper = target_mean
     upper_value = objective(upper)
-
-    if lower_value >= 0.0:
-        raise ValueError(
-            "Could not bracket mu below the requested conditional mean. "
-            "The target may be too close to m for the supported numerical "
-            "precision."
-        )
     if upper_value < 0.0:
         raise ArithmeticError(
             "Could not bracket the conditioned-Poisson rate even though "
@@ -105,6 +96,35 @@ def _solve_mu_for_conditional_mean(
         )
     if upper_value == 0.0:
         return float(upper)
+
+    # Descend from the target rather than evaluating a fixed near-zero
+    # rate. For large m, P[Poisson(1e-12) >= m] can underflow even when the
+    # actual root is moderate. The conditional mean tends to m as the rate
+    # tends to zero, so repeated halving must eventually produce a negative
+    # objective for every numerically resolvable target_mean > m.
+    lower = upper / 2.0
+    for _ in range(300):
+        try:
+            lower_value = objective(lower)
+        except ArithmeticError as error:
+            raise ValueError(
+                "Could not numerically bracket the conditioned-Poisson "
+                "rate. The target mean may be too close to m for the "
+                "supported floating-point precision."
+            ) from error
+        if lower_value < 0.0:
+            break
+        lower /= 2.0
+        if lower < _MU_LOWER:
+            raise ValueError(
+                "Could not bracket the conditioned-Poisson rate above "
+                "the supported minimum rate. The target mean may be too "
+                "close to m."
+            )
+    else:
+        raise ArithmeticError(
+            "Conditioned-Poisson rate bracketing did not converge."
+        )
 
     return float(
         brentq(

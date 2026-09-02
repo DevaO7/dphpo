@@ -1,0 +1,68 @@
+name: exp6_fixed_budget_dp_sha_schedule
+runner: optimize_fixed_expected_budget_dp_sha
+run_id: run_id_4
+
+# L=1 is the Papernot--Steinke Poisson boundary case: every sampled run gets
+# required_final_resource and the mechanism releases top-1. L>=2 enumerates
+# the predeclared geometric DP-SHA family.
+schedule:
+  family: geometric
+  minimum_resource: 10000
+  required_final_resource: 10000
+  num_stages:
+    minimum: 1
+    maximum: 5
+  retention_factors: [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+  survivor_rounding: floor
+  resource_rounding: nearest
+
+coverage:
+  # Options: all_configurations or at_least_one_good. The latter additionally
+  # requires num_good_configurations. These are distinct probability events.
+  criterion: all_configurations
+  num_configurations: 10
+  num_good_configurations: null  # Set to an integer only for at_least_one_good.
+  target_probability: 0.95
+  target_final_nonempty_probability: 0.95
+  maximum_initial_expected_num_trials: 1000000.0
+
+compute:
+  # Expected communication-round budget. The random realized Poisson count
+  # may exceed this value; later stages never recycle realized leftover work.
+  expected_budget: 500000
+
+privacy:
+  target_epsilon: 2.0
+  delta: 1.0e-5
+  min_renyi_order: 2
+  max_renyi_order: 1000
+  reject_renyi_order_boundary: true
+  sigma_search:
+    initial_sigma: 2.0
+    minimum_sigma: 0.05
+    maximum_sigma: 100.0
+    relative_tolerance: 1.0e-6
+    max_iterations: 80
+
+search:
+  relative_constraint_tolerance: 1.0e-10
+  # Each structurally feasible (L, q) candidate has an independent sigma
+  # calibration. Under Slurm, auto uses at most SLURM_CPUS_PER_TASK worker
+  # processes; outside Slurm it deliberately remains serial.
+  num_workers: auto
+  multiprocessing_start_method: spawn
+
+plot:
+  figsize: [8.0, 5.5]
+  dpi: 300
+
+output:
+  all_candidates_filename: all_schedule_candidates.csv
+  feasible_candidates_filename: privacy_feasible_schedule_candidates.csv
+  rejected_candidates_filename: rejected_schedule_candidates.csv
+  pareto_candidates_filename: pareto_schedule_candidates.csv
+  stage_diagnostics_filename: schedule_stage_diagnostics.csv
+  selected_schedule_filename: selected_schedule.json
+  search_metadata_filename: search_metadata.json
+  sigma_vs_expected_compute_plot_filename: sigma_vs_expected_compute.png
+  sigma_vs_retention_factor_plot_filename: sigma_vs_retention_factor.png

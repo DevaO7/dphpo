@@ -1,0 +1,26 @@
+name: exp5_fixed_schedule_privacy_accounting
+runner: compile_fixed_schedule_q_sweep
+run_id: compiled_varying_q
+
+q_sweep:
+  input_root: ${paths.results_root}/${experiment.name}
+  source_glob: vary_q_*
+  expected_q_values: [0.06, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+  target_noise_multiplier: 2.0
+  summary_filename: epsilon_vs_initial_expected_breadth.csv
+  stage_filename: stage_rdp_diagnostics.csv
+
+plot:
+  figsize: [11.0, 6.0]
+  dpi: 300
+
+output:
+  combined_summary_filename: combined_q_sweep_summary.csv
+  combined_stage_filename: combined_q_sweep_stage_diagnostics.csv
+  input_validation_filename: q_sweep_input_validation.csv
+  epsilon_heatmap_filename: epsilon_n_stage_heatmap.png
+  privacy_gap_heatmap_filename: privacy_gap_n_stage_minus_papernot_heatmap.png
+  expected_compute_ratio_heatmap_filename: expected_compute_ratio_heatmap.png
+  final_stage_zero_probability_heatmap_filename: final_stage_zero_probability_heatmap.png
+  stage_rdp_share_heatmaps_filename: stage_rdp_share_heatmaps.png
+  retained_count_heatmaps_filename: retained_count_heatmaps.png

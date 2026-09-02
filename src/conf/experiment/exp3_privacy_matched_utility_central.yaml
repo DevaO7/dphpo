@@ -9,7 +9,7 @@ simulation:
   stage: 2
   stage_1_end: 2000
   stage_2_end: 5000
-  mu: 10
+  mu: 20
   target_epsilon: 2.3
 
 run_mode:
@@ -20,10 +20,9 @@ run_mode:
   compile_result: true
 
 compilation:
-  targets: [utility_privacy]
+  targets: [utility_privacy, sigma_privacy]
   methods:
     - papernot_poisson_baseline
-    - two_stage_tuning
     - two_stage_poisson_tuning
   target_epsilons: [0.2, 0.9, 1.6, 2.3, 3.0]
   target_mus: [5, 7, 10, 15, 20]

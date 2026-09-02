@@ -1,0 +1,29 @@
+name: exp4_coverage_probability_vs_mean
+runner: coverage_probability_vs_mean
+run_id: run_id_4
+
+coverage:
+  # N: number of hyperparameter configurations sampled uniformly.
+  num_configurations: 10
+  # m: minimum conditioned Poisson count for the top-m mechanism.
+  m: 2
+  mu:
+    # mu is the underlying Poisson mean for both displayed expressions.
+    min: 10
+    max: 100.0
+    num_points: 500
+    scale: linear
+
+plot:
+  figsize: [8.0, 5.0]
+  dpi: 300
+  probability_scale: log
+
+inverse_coverage:
+  # Desired probabilities for covering all N configurations.
+  target_probabilities: [0.8, 0.9, 0.95, 0.99]
+  output_filename: required_mu_for_coverage.csv
+
+output:
+  plot_filename: coverage_probability_vs_mean.png
+  data_filename: coverage_probability_vs_mean.csv

@@ -69,6 +69,8 @@ AGENTS.md
 docs/
 results_central
 data
+tests/
+src/job_dp_sha_schedule.sh
 
 # Unit test / coverage reports
 htmlcov/

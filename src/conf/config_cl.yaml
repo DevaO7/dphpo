@@ -1,5 +1,5 @@
 defaults:
-  - experiment: exp3_privacy_matched_utility_central
+  - experiment: exp6_fixed_budget_dp_sha_schedule
   - hp_candidate_set: fashionmnist_learning_rate
   - _self_
 

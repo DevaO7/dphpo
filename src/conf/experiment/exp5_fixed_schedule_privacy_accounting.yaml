@@ -1,0 +1,42 @@
+name: exp5_fixed_schedule_privacy_accounting
+runner: epsilon_vs_mean_poisson
+run_id: vary_q_0p5
+
+# This first comparison matches breadth, not compute: Papernot uses an
+# unconditioned Poisson rate theta_P equal to the N-stage mechanism's
+# initial conditional expected count bar_mu_1.
+comparison:
+  mode: breadth_matched
+
+fixed_schedule:
+  # A fixed three-rung geometric schedule. All entries are predeclared;
+  # realized Poisson workloads do not change later rungs.
+  num_stages: 3
+  retention_factor: 0.5
+  minimum_resource: 500
+  survivor_rounding: floor
+  resource_rounding: nearest
+  initial_expected_trials:
+    # bar_mu_1 = E[K_0,1 | K_0,1 >= m_1].
+    min: 20.0
+    max: 100.0
+    num_points: 19
+    scale: linear
+
+privacy:
+  delta: 1.0e-5
+  max_renyi_order: 1000
+  # All stages and the breadth-matched baseline use the same sigma.
+  noise_multipliers: [2.0]
+
+plot:
+  figsize: [8.0, 5.0]
+  dpi: 300
+  x_scale: linear
+
+output:
+  summary_data_filename: epsilon_vs_initial_expected_breadth.csv
+  stage_data_filename: stage_rdp_diagnostics.csv
+  epsilon_plot_filename: epsilon_vs_initial_expected_breadth.png
+  privacy_gap_plot_filename: privacy_gap_vs_initial_expected_breadth.png
+  expected_compute_plot_filename: expected_compute_vs_initial_expected_breadth.png
