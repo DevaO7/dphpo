@@ -1,14 +1,14 @@
 name: exp6_fixed_budget_dp_sha_schedule
 runner: optimize_fixed_expected_budget_dp_sha
-run_id: run_id_4
+run_id: N_20_100K_Compute_500_r_min_40K_Max
 
 # L=1 is the Papernot--Steinke Poisson boundary case: every sampled run gets
 # required_final_resource and the mechanism releases top-1. L>=2 enumerates
 # the predeclared geometric DP-SHA family.
 schedule:
   family: geometric
-  minimum_resource: 10000
-  required_final_resource: 10000
+  minimum_resource: 2000
+  required_final_resource: 40000
   num_stages:
     minimum: 1
     maximum: 5
@@ -20,7 +20,7 @@ coverage:
   # Options: all_configurations or at_least_one_good. The latter additionally
   # requires num_good_configurations. These are distinct probability events.
   criterion: all_configurations
-  num_configurations: 10
+  num_configurations: 20
   num_good_configurations: null  # Set to an integer only for at_least_one_good.
   target_probability: 0.95
   target_final_nonempty_probability: 0.95
@@ -29,7 +29,7 @@ coverage:
 compute:
   # Expected communication-round budget. The random realized Poisson count
   # may exceed this value; later stages never recycle realized leftover work.
-  expected_budget: 500000
+  expected_budget: 6000000
 
 privacy:
   target_epsilon: 2.0

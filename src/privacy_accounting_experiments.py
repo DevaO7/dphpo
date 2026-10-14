@@ -588,7 +588,7 @@ def compare_with_peeling_plot():
     plt.yscale("log")
     plt.xlabel(r"Expected number of trials $\mathbb{E}[K]$")
     plt.ylabel("Epsilon (log scale)")
-    plt.title("Privacy Accounting: Peeling vs Top-M")
+    plt.title("m-fold Top-1 Composition vs. Direct Top-m")
     plt.legend()
     plt.tight_layout()
 
@@ -2036,4 +2036,5 @@ def main(config: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    # compare_with_peeling_plot()
     main()

@@ -27,6 +27,7 @@ from .validation import validate_eta, validate_positive_integer
 _ETA_ZERO_TOL = 1e-12
 _GAMMA_LOWER = 1e-12
 _GAMMA_UPPER = 1.0 - 1e-12
+_LOWER_TAIL_DIRECT_MAX = 0.99
 
 
 def _validate_gamma(gamma: float) -> float:
@@ -66,6 +67,23 @@ def _pmf_from_parameters(k: int, eta: float, gamma: float) -> float:
     """
     Compute P(K0 = k), where K0 is supported on {1, 2, ...}.
     """
+    log_probability = _log_pmf_from_parameters(k, eta, gamma)
+
+    if log_probability == -math.inf:
+        return 0.0
+
+    probability = math.exp(log_probability)
+
+    # Protect against tiny floating-point overshoots.
+    return min(max(probability, 0.0), 1.0)
+
+
+def _log_pmf_from_parameters(
+    k: int,
+    eta: float,
+    gamma: float,
+) -> float:
+    """Compute log P(K0 = k) without exponentiating a tiny mass."""
     eta = validate_eta(eta)
     gamma = _validate_gamma(gamma)
 
@@ -75,17 +93,16 @@ def _pmf_from_parameters(k: int, eta: float, gamma: float) -> float:
     k = int(k)
 
     if k < 1:
-        return 0.0
+        return -math.inf
 
     log_one_minus_gamma = math.log1p(-gamma)
 
     if _is_eta_zero(eta):
-        log_probability = (
+        return (
             k * log_one_minus_gamma
             - math.log(k)
             - math.log(-math.log(gamma))
         )
-        return math.exp(log_probability)
 
     # (eta)_k = Gamma(eta + k) / Gamma(eta).
     # For eta in (-1, 0), both the rising factorial and the normalization
@@ -101,17 +118,100 @@ def _pmf_from_parameters(k: int, eta: float, gamma: float) -> float:
             "Unexpected sign while evaluating the TNB probability mass."
         )
 
-    log_probability = (
+    return (
         log_abs_rising_factorial
         - math.lgamma(k + 1)
         + k * log_one_minus_gamma
         - math.log(abs(normalization))
     )
 
-    probability = math.exp(log_probability)
 
-    # Protect against tiny floating-point overshoots.
-    return min(max(probability, 0.0), 1.0)
+def _relative_tail_sums_from_parameters(
+    m: int,
+    eta: float,
+    gamma: float,
+) -> tuple[float, float]:
+    """Return tail mass and first moment relative to the mass at ``m``.
+
+    Starting the recurrence at ``m`` avoids subtracting a lower-tail sum
+    from one. The unknown normalization constant cancels from the
+    conditional mean and is restored in log space when a tail probability
+    is needed.
+    """
+    m = validate_positive_integer(m, "m")
+    eta = validate_eta(eta)
+    gamma = _validate_gamma(gamma)
+
+    one_minus_gamma = 1.0 - gamma
+    relative_mass = 1.0
+    relative_first_moment = float(m)
+    relative_probability = 1.0
+    k = m
+    tolerance = 8.0 * np.finfo(float).eps
+
+    while True:
+        ratio = (
+            (eta + k) * one_minus_gamma / (k + 1.0)
+        )
+        relative_probability *= ratio
+        k += 1
+
+        if relative_probability == 0.0:
+            break
+
+        relative_mass += relative_probability
+        relative_first_moment += k * relative_probability
+
+        next_ratio = (
+            (eta + k) * one_minus_gamma / (k + 1.0)
+        )
+        ratio_bound = max(one_minus_gamma, next_ratio)
+
+        if ratio_bound < 1.0:
+            next_probability = relative_probability * next_ratio
+            remaining_mass_bound = (
+                next_probability / (1.0 - ratio_bound)
+            )
+            remaining_first_moment_bound = next_probability * (
+                (k + 1.0) / (1.0 - ratio_bound)
+                + ratio_bound / (1.0 - ratio_bound) ** 2
+            )
+
+            if (
+                remaining_mass_bound
+                <= tolerance * relative_mass
+                and remaining_first_moment_bound
+                <= tolerance * relative_first_moment
+            ):
+                break
+
+    return relative_mass, relative_first_moment
+
+
+def _log_survival_probability_from_parameters(
+    m: int,
+    eta: float,
+    gamma: float,
+) -> float:
+    """Compute log P(K0 >= m) without lower-tail cancellation."""
+    m = validate_positive_integer(m, "m")
+    eta = validate_eta(eta)
+    gamma = _validate_gamma(gamma)
+
+    probability_less_than_m = _probability_less_than_from_parameters(
+        m, eta, gamma
+    )
+
+    if probability_less_than_m <= _LOWER_TAIL_DIRECT_MAX:
+        return math.log1p(-probability_less_than_m)
+
+    relative_mass, _ = _relative_tail_sums_from_parameters(
+        m, eta, gamma
+    )
+    return (
+        _log_pmf_from_parameters(m, eta, gamma)
+        + math.log(relative_mass)
+    )
 
 
 def _probability_less_than_from_parameters(
@@ -147,10 +247,11 @@ def _conditional_mean_from_parameters(
     )
     survival_probability = 1.0 - probability_less_than_m
 
-    if survival_probability <= 0.0:
-        raise ArithmeticError(
-            "P(K0 >= m) is numerically non-positive."
+    if probability_less_than_m > _LOWER_TAIL_DIRECT_MAX:
+        relative_mass, relative_first_moment = (
+            _relative_tail_sums_from_parameters(m, eta, gamma)
         )
+        return relative_first_moment / relative_mass
 
     lower_first_moment = math.fsum(
         k * _pmf_from_parameters(k, eta, gamma)
@@ -372,11 +473,15 @@ class TNBDistribution:
         """
         Return P(K0 >= m).
         """
-        survival = 1.0 - self.probability_less_than(m)
+        log_survival = _log_survival_probability_from_parameters(
+            m, self.eta, self.gamma
+        )
+        survival = math.exp(log_survival)
 
         if survival <= 0.0:
             raise ArithmeticError(
-                "P(K0 >= m) is numerically non-positive."
+                "P(K0 >= m) is positive but smaller than the "
+                "floating-point range."
             )
 
         return survival
@@ -443,7 +548,13 @@ class TNBDistribution:
         if rng is None:
             rng = np.random.default_rng()
 
-        probability = self.pmf(m) / self.survival_probability(m)
+        log_probability = (
+            _log_pmf_from_parameters(m, self.eta, self.gamma)
+            - _log_survival_probability_from_parameters(
+                m, self.eta, self.gamma
+            )
+        )
+        probability = math.exp(log_probability)
         cumulative_probability = probability
         uniform = float(rng.random())
         k = m
@@ -474,14 +585,16 @@ class TNBDistribution:
         where K = K0 | K0 >= m.
         """
         m = validate_positive_integer(m, "m")
-        survival = self.survival_probability(m)
+        log_survival = _log_survival_probability_from_parameters(
+            m, self.eta, self.gamma
+        )
 
         log_value = (
             (1.0 - m) * math.log(self.gamma)
             + math.log(self.mean())
             + (m - 1.0) * math.log1p(-self.gamma)
             - math.lgamma(m + 1)
-            - math.log(survival)
+            - log_survival
         )
 
         for i in range(1, m):

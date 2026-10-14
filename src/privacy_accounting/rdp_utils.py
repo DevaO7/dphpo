@@ -439,3 +439,44 @@ def convert_rdp_to_approx_dp(
         is_at_min_order=(best_index == 0),
         is_at_max_order=(best_index == len(curve) - 1),
     )
+
+
+def convert_rdp_to_approx_dp_with_policy(
+    curve: RdpCurve,
+    *,
+    delta: float,
+    policy: str = "improved",
+) -> ApproxDPResult:
+    """Explicit conversion policy for new comparisons; legacy defaults stay fixed.
+
+    ``standard`` delegates to ``convert_rdp_to_approx_dp``. ``improved``
+    uses Proposition 12 of Balle et al. (arXiv:2004.00010 v4), together
+    with the KL zero-epsilon bound used by dp_accounting.rdp.compute_epsilon.
+    This is also consistent with the improved conversion used internally
+    for the Poisson selection accountant's auxiliary delta bound.
+
+    The same policy should be used for TCT's base certificates and for the
+    final conversion of all RDP-based comparison methods. Optimization is
+    over stored orders only. A zero RDP curve converts to zero epsilon.
+    """
+    if not isinstance(curve, RdpCurve):
+        raise TypeError("curve must be an RdpCurve.")
+    delta = _validate_delta(delta)
+    if policy == "standard":
+        return convert_rdp_to_approx_dp(curve, delta=delta)
+    if policy != "improved":
+        raise ValueError("RDP conversion policy must be 'standard' or 'improved'.")
+    orders = curve.orders
+    epsilons = (
+        curve.epsilons
+        + np.log1p(-1.0 / orders)
+        - (math.log(delta) + np.log(orders)) / (orders - 1.0)
+    )
+    zero_bound = delta**2 + np.expm1(-curve.epsilons) > 0
+    epsilons = np.maximum(np.where(zero_bound, 0.0, epsilons), 0.0)
+    best = int(np.argmin(epsilons))
+    return ApproxDPResult(
+        epsilon=float(epsilons[best]), delta=delta,
+        best_order=float(orders[best]), best_index=best,
+        is_at_min_order=best == 0, is_at_max_order=best == len(curve) - 1,
+    )

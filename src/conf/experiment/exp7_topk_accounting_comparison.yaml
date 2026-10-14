@@ -1,0 +1,67 @@
+name: exp7_topk_accounting_comparison
+runner: compare_topk_accountants
+run_id: fixed_dpsgd_candidate_sweep
+
+# All accountants receive the same base mechanism. All final bounds use the
+# same delta_target and RDP conversion policy. No training is performed.
+comparison:
+  mode: fixed_base_setup
+  methods:
+    - tct_one_shot
+    - basic_dp_composition_one_shot
+    - advanced_dp_composition_one_shot
+    - full_composition_one_shot
+    - poisson_conditioned_topk
+    - poisson_expected_compute_matched_topk
+  # Derived: approx_dp_composition_best = min(basic DP, advanced DP).
+  # one_shot_best = min(TCT, basic DP, advanced DP, full RDP), accepted only.
+  # The expected-compute variant calibrates E[K | K>=k]=N, not mu=N.
+
+candidates:
+  # A scalar remains supported for single-N runs.
+  num_configurations: [20, 100, 1000]
+  top_k_values: [1, 2, 5, 10]
+  randomized_sampling: uniform_with_replacement
+
+coverage:
+  criterion: all_configurations
+  # Conditioned-Poisson coverage alpha_k is calibrated independently for
+  # each k and target. One-shot coverage stays 1.0, not target_probability.
+  target_probabilities: [0.80, 0.95, 0.99]
+  maximum_expected_num_trials: 1000000.0
+
+base_mechanism:
+  type: dpsgd
+  num_rounds_values: [2000, 10000, 40000]
+  data_sampling_rate: 0.002
+  noise_multipliers: [1.0, 2.0, 5.0, 10.0]
+  # The privacy curve must cover the complete model/score output.
+  score_privacy: public_evaluation
+
+privacy:
+  delta_target: 1.0e-5
+  min_renyi_order: 2
+  max_renyi_order: 1000
+  reject_renyi_order_boundary: true
+  # Explicit for exp7; existing experiments keep their conversion defaults.
+  rdp_conversion: improved
+
+tct:
+  base_delta_mode: optimize
+  composition_bounds: [basic, advanced]
+  advanced_formula: lemma_a4
+  optimizer:
+    relative_tolerance: 1.0e-8
+    max_iterations: 200
+    grid_points: 65
+    logit_limit: 30.0
+
+plot:
+  enabled: true
+  dpi: 150
+
+output:
+  summary_filename: comparison.csv
+  diagnostics_filename: accounting_diagnostics.json
+  base_curves_filename: base_rdp_curves.csv
+  metadata_filename: metadata.json

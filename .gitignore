@@ -70,7 +70,10 @@ docs/
 results_central
 data
 tests/
+tests/*
+docs/*
 src/job_dp_sha_schedule.sh
+scratch_pad_plots
 
 # Unit test / coverage reports
 htmlcov/

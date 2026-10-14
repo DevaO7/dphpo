@@ -49,6 +49,8 @@ from .validation import (
 
 
 _PROBABILITY_TOLERANCE = 1e-12
+_COVERAGE_DP_RELATIVE_TOLERANCE = 1e-13
+_MAX_COVERAGE_DP_DRAWS = 10_000_000
 _COVERAGE_CRITERIA = {
     "all_configurations",
     "at_least_one_good",
@@ -382,6 +384,168 @@ def unconditioned_coverage_probability(
     return float(probability)
 
 
+def _conditioned_all_configurations_coverage_via_occupancy_dp(
+    *,
+    underlying_poisson_rate: float,
+    retained_count: int,
+    num_configurations: int,
+    conditioning_probability: float,
+) -> float:
+    r"""Stably compute all-configurations coverage when ``m > N``.
+
+    Conditional on a fixed trial count ``K=k``, let ``D_k`` be the number
+    of distinct configurations observed after ``k`` uniform draws. Its
+    distribution has the nonnegative recursion
+
+    .. math::
+
+        P(D_{k+1}=j)
+        = \frac{j}{N}P(D_k=j)
+        + \frac{N-j+1}{N}P(D_k=j-1).
+
+    The desired probability is the expectation of ``P(D_K=N | K)`` under
+    the Poisson distribution conditioned on ``K >= m``. Both the occupancy
+    recursion and the final sum contain only nonnegative terms, avoiding the
+    catastrophic cancellation of the equivalent inclusion--exclusion sum.
+    """
+    if num_configurations == 1:
+        return 1.0
+
+    # These are two independent union bounds on the conditional probability
+    # that at least one configuration is missing. If either is below half an
+    # ulp at one, the correctly rounded coverage probability is exactly 1.0.
+    half_distance_to_predecessor_of_one = (
+        1.0 - math.nextafter(1.0, 0.0)
+    ) / 2.0
+    log_half_ulp_at_one = math.log(
+        half_distance_to_predecessor_of_one
+    )
+    log_missing_bound_from_minimum_count = (
+        math.log(num_configurations)
+        + retained_count * math.log1p(-1.0 / num_configurations)
+    )
+    log_missing_bound_from_poisson_splitting = (
+        math.log(num_configurations)
+        - underlying_poisson_rate / num_configurations
+        - math.log(conditioning_probability)
+    )
+    if min(
+        log_missing_bound_from_minimum_count,
+        log_missing_bound_from_poisson_splitting,
+    ) <= log_half_ulp_at_one:
+        return 1.0
+    if retained_count > _MAX_COVERAGE_DP_DRAWS:
+        raise ArithmeticError(
+            "Conditioned all-configurations coverage dynamic program "
+            f"requires more than {_MAX_COVERAGE_DP_DRAWS} draws."
+        )
+
+    # occupancy_probabilities[j] is P(D_k=j) for the current fixed count k.
+    # Updating in descending j order preserves both values from step k.
+    occupancy_probabilities = [0.0] * (num_configurations + 1)
+    occupancy_probabilities[0] = 1.0
+    stay_probabilities = [
+        seen_count / num_configurations
+        for seen_count in range(num_configurations + 1)
+    ]
+    discover_probabilities = [
+        (num_configurations - seen_count + 1) / num_configurations
+        for seen_count in range(num_configurations + 1)
+    ]
+
+    def advance_occupancy(draw_count: int) -> None:
+        maximum_seen = min(draw_count, num_configurations)
+        for seen_count in range(maximum_seen, 0, -1):
+            occupancy_probabilities[seen_count] = (
+                occupancy_probabilities[seen_count]
+                * stay_probabilities[seen_count]
+                + occupancy_probabilities[seen_count - 1]
+                * discover_probabilities[seen_count]
+            )
+        occupancy_probabilities[0] = 0.0
+
+    for draw_count in range(1, retained_count + 1):
+        advance_occupancy(draw_count)
+
+    log_probability_at_m = (
+        -underlying_poisson_rate
+        + retained_count * math.log(underlying_poisson_rate)
+        - math.lgamma(retained_count + 1)
+    )
+    conditional_count_probability = math.exp(
+        log_probability_at_m - math.log(conditioning_probability)
+    )
+    if (
+        not math.isfinite(conditional_count_probability)
+        or conditional_count_probability < 0.0
+        or conditional_count_probability > 1.0 + _PROBABILITY_TOLERANCE
+    ):
+        raise ArithmeticError(
+            "The conditioned-Poisson probability at K=m fell outside "
+            "[0, 1]."
+        )
+    conditional_count_probability = min(
+        conditional_count_probability,
+        1.0,
+    )
+    probability = (
+        conditional_count_probability
+        * occupancy_probabilities[num_configurations]
+    )
+    draw_count = retained_count
+
+    while True:
+        # The remaining conditional count mass is also an absolute upper
+        # bound on the uncomputed coverage contribution because occupancy
+        # probabilities cannot exceed one.
+        remaining_conditional_mass = (
+            float(gammainc(draw_count + 1, underlying_poisson_rate))
+            / conditioning_probability
+        )
+        if (
+            not math.isfinite(remaining_conditional_mass)
+            or remaining_conditional_mass < 0.0
+            or remaining_conditional_mass
+            > 1.0 + _PROBABILITY_TOLERANCE
+        ):
+            raise ArithmeticError(
+                "The remaining conditioned-Poisson mass fell outside "
+                "[0, 1]."
+            )
+        remaining_conditional_mass = min(
+            remaining_conditional_mass,
+            1.0,
+        )
+        summation_tolerance = max(
+            math.ulp(probability),
+            _COVERAGE_DP_RELATIVE_TOLERANCE * probability,
+        )
+        if remaining_conditional_mass <= summation_tolerance:
+            break
+        if draw_count >= _MAX_COVERAGE_DP_DRAWS:
+            raise ArithmeticError(
+                "Conditioned all-configurations coverage dynamic program "
+                f"exceeded {_MAX_COVERAGE_DP_DRAWS} draws."
+            )
+
+        draw_count += 1
+        advance_occupancy(draw_count)
+        conditional_count_probability *= (
+            underlying_poisson_rate / draw_count
+        )
+        if conditional_count_probability == 0.0:
+            raise ArithmeticError(
+                "The conditioned-Poisson mass underflowed before the "
+                "coverage tail was resolved."
+            )
+        probability += (
+            conditional_count_probability
+            * occupancy_probabilities[num_configurations]
+        )
+
+    return float(probability)
+
+
 def conditioned_all_configurations_coverage_probability(
     *,
     underlying_poisson_rate: float,
@@ -391,11 +555,11 @@ def conditioned_all_configurations_coverage_probability(
     r"""Return ``alpha_m`` from the coverage subsection of ``main.tex``.
 
     The trial count is ``Poisson(theta)`` conditioned on ``K >= m`` and
-    configurations are sampled uniformly with replacement.  The numerator
-    is the probability of both covering every configuration and satisfying
-    the conditioning event.  Inclusion--exclusion over missing
-    configurations rewrites the infinite expression in ``main.tex`` as a
-    finite sum of Poisson survival probabilities.
+    configurations are sampled uniformly with replacement. For ``m <= N``,
+    covering all configurations already implies the conditioning event. For
+    ``m > N``, a nonnegative dynamic program over the number of distinct
+    configurations avoids cancellation in the equivalent alternating
+    inclusion--exclusion expression from ``main.tex``.
     """
     underlying_poisson_rate = validate_positive_float(
         underlying_poisson_rate,
@@ -414,42 +578,23 @@ def conditioned_all_configurations_coverage_probability(
     conditioning_probability = distribution.survival_probability(
         retained_count
     )
-    unconditional_coverage = unconditioned_coverage_probability(
-        underlying_poisson_rate=underlying_poisson_rate,
-        num_configurations=num_configurations,
-        coverage_criterion="all_configurations",
-    )
     if retained_count <= num_configurations:
         # Covering all N configurations implies K >= N >= m.
+        unconditional_coverage = unconditioned_coverage_probability(
+            underlying_poisson_rate=underlying_poisson_rate,
+            num_configurations=num_configurations,
+            coverage_criterion="all_configurations",
+        )
         probability = unconditional_coverage / conditioning_probability
     else:
-        # For a fixed set of j missing configurations, Poisson splitting
-        # gives a zero-count factor exp(-theta*j/N); all remaining draws
-        # form Poisson(theta*(N-j)/N). Requiring at least m total draws and
-        # applying inclusion-exclusion yields the numerator below.
-        terms = []
-        for missing_count in range(num_configurations + 1):
-            remaining_fraction = (
-                num_configurations - missing_count
-            ) / num_configurations
-            remaining_rate = underlying_poisson_rate * remaining_fraction
-            remaining_survival = (
-                0.0
-                if remaining_rate == 0.0
-                else float(gammainc(retained_count, remaining_rate))
+        probability = (
+            _conditioned_all_configurations_coverage_via_occupancy_dp(
+                underlying_poisson_rate=underlying_poisson_rate,
+                retained_count=retained_count,
+                num_configurations=num_configurations,
+                conditioning_probability=conditioning_probability,
             )
-            term = (
-                math.comb(num_configurations, missing_count)
-                * math.exp(
-                    -underlying_poisson_rate
-                    * missing_count
-                    / num_configurations
-                )
-                * remaining_survival
-            )
-            terms.append(-term if missing_count % 2 else term)
-        numerator = math.fsum(terms)
-        probability = numerator / conditioning_probability
+        )
 
     if (
         not math.isfinite(probability)

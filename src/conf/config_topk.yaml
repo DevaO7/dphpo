@@ -1,0 +1,12 @@
+defaults:
+  - experiment: exp7_topk_accounting_comparison
+  - _self_
+
+paths:
+  results_root: results_central
+
+hydra:
+  run:
+    dir: ${paths.results_root}/${experiment.name}/${experiment.run_id}
+  job:
+    chdir: false
